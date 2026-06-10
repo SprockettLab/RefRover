@@ -18,8 +18,14 @@ htmlcov/
 # Type checking
 .mypy_cache/
 
-# Data and databases — large files not tracked
-data/
+# Data and databases — large files not tracked (scripts are tracked)
+data/**/*.tsv
+data/**/*.csv
+data/**/*.pdf
+data/**/*.png
+data/**/*.txt
+data/**/gtdb_gather/
+data/**/gtdb_subdb/
 *.zip
 *.sbt.zip
 *.sig
