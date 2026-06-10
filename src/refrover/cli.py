@@ -55,11 +55,14 @@ def sketch(manifest, outdir, ksize, scaled, threads, force):
 @click.option("--manifest", required=True, type=click.Path(exists=True))
 @click.option("--selector", default="archetype", show_default=True,
               type=click.Choice(["random", "maxmin", "kmedoids", "archetype", "greedy_var"]))
-@click.option("--k", default=5, show_default=True, help="Number of prototypes per sample")
+@click.option("--k", default="5", show_default=True,
+              help="Prototypes per sample, or 'auto' to infer from similarity structure")
+@click.option("--adaptive-k-method", default="similarity_gap", show_default=True,
+              type=click.Choice(["scree_elbow", "similarity_gap", "saturation_curve"]))
 @click.option("--min-jaccard", default=0.1, show_default=True)
 @click.option("--outdir", required=True, type=click.Path())
 @click.option("--force", is_flag=True)
-def select(sketches, manifest, selector, k, min_jaccard, outdir, force):
+def select(sketches, manifest, selector, k, adaptive_k_method, min_jaccard, outdir, force):
     """Select prototype assemblies for each sample."""
     import pandas as pd
     from refrover.io import read_manifest, write_assignments
@@ -84,17 +87,29 @@ def select(sketches, manifest, selector, k, min_jaccard, outdir, force):
     click.echo(f"Computing similarity matrix from {len(sig_paths)} sketches...")
     sim_matrix = matrix_from_sigs(sig_paths)
 
+    use_adaptive_k = (str(k).lower() == "auto")
+    fixed_k = None if use_adaptive_k else int(k)
+
     sel_cls = SELECTOR_REGISTRY[selector]
-    sel = sel_cls(k=k, min_jaccard=min_jaccard)
 
     rows = []
     for _, row in df.iterrows():
         sid = row["sample_id"]
+
+        if use_adaptive_k:
+            from refrover.adaptive_k import estimate_k
+            k_i = estimate_k(sim_matrix, sid, min_jaccard=min_jaccard,
+                             method=adaptive_k_method)
+        else:
+            k_i = fixed_k
+
+        sel = sel_cls(k=k_i, min_jaccard=min_jaccard)
         prototypes = sel.select(sim_matrix, sid)
         rows.append({
             "sample_id": sid,
             "prototype_ids": ",".join(prototypes),
             "n_prototypes": len(prototypes),
+            "k_estimated": k_i if use_adaptive_k else None,
         })
 
     assignments = pd.DataFrame(rows)
