@@ -4,9 +4,11 @@ RefRoverPipeline: orchestrates the full sketch → select → align → coverage
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Optional
 import pandas as pd
 
 from refrover.selectors.base import BaseSelector
+from refrover.selectors.containment import ContainmentSelector
 
 
 @dataclass
@@ -24,6 +26,7 @@ class RefRoverPipeline:
         threads: int = 8,
         outdir: Path = Path("refrover_out"),
         force: bool = False,
+        containment_matrix: Optional[pd.DataFrame] = None,
     ):
         self.manifest = manifest
         self.selector = selector
@@ -31,6 +34,13 @@ class RefRoverPipeline:
         self.threads = threads
         self.outdir = Path(outdir)
         self.force = force
+        self.containment_matrix = containment_matrix
+
+        if isinstance(selector, ContainmentSelector) and containment_matrix is None:
+            raise ValueError(
+                "ContainmentSelector requires a containment_matrix to be passed "
+                "to RefRoverPipeline."
+            )
 
     def run(self) -> PipelineResults:
         from refrover.sketch import sketch_assemblies, compare_sketches
@@ -46,18 +56,21 @@ class RefRoverPipeline:
         cov_dir = outdir / "coverage"
         fmt_dir = outdir / "formatted"
 
-        # 1. Sketch
-        sig_paths = sketch_assemblies(
-            self.manifest["assembly"].tolist(),
-            outdir=sketch_dir,
-            threads=self.threads,
-            force=self.force,
-        )
-
-        # 2. Pairwise similarity
-        sim_csv = outdir / "similarity.csv"
-        compare_sketches(sig_paths, output_csv=sim_csv, force=self.force)
-        sim_matrix = load_similarity_matrix(sim_csv)
+        # 1-2. Build the selection matrix.
+        # Containment selectors use a precomputed reads-vs-assembly containment
+        # matrix; Jaccard selectors sketch the assemblies and compare them.
+        if self.containment_matrix is not None:
+            sim_matrix = self.containment_matrix
+        else:
+            sig_paths = sketch_assemblies(
+                self.manifest["assembly"].tolist(),
+                outdir=sketch_dir,
+                threads=self.threads,
+                force=self.force,
+            )
+            sim_csv = outdir / "similarity.csv"
+            compare_sketches(sig_paths, output_csv=sim_csv, force=self.force)
+            sim_matrix = load_similarity_matrix(sim_csv)
 
         # 3. Prototype selection
         rows = []

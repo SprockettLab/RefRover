@@ -2,6 +2,8 @@ import numpy as np
 import pandas as pd
 import pytest
 from refrover.selectors.containment import ContainmentSelector
+from refrover.selectors.base import BaseSelector
+from refrover.selectors import SELECTOR_REGISTRY, CONTAINMENT_SELECTORS
 
 
 @pytest.fixture
@@ -84,3 +86,42 @@ def test_results_are_unique(containment_mat):
     sel = ContainmentSelector(k=4, min_containment=0.05)
     result = sel.select(containment_mat, "s0")
     assert len(result) == len(set(result))
+
+
+# ── Registry / interface integration ──────────────────────────────────────────
+
+def test_is_base_selector_subclass():
+    assert issubclass(ContainmentSelector, BaseSelector)
+
+
+def test_registered_in_registry():
+    assert SELECTOR_REGISTRY["containment"] is ContainmentSelector
+    assert "containment" in CONTAINMENT_SELECTORS
+
+
+def test_constructible_via_registry_min_jaccard(containment_mat):
+    """The registry constructs selectors uniformly with k= and min_jaccard=."""
+    sel_cls = SELECTOR_REGISTRY["containment"]
+    sel = sel_cls(k=3, min_jaccard=0.05)
+    assert sel.min_containment == 0.05
+    result = sel.select(containment_mat, "s0")
+    assert result[0] == "s0"
+    assert len(result) == 3
+
+
+def test_min_jaccard_overrides_min_containment():
+    sel = ContainmentSelector(k=3, min_containment=0.05, min_jaccard=0.2)
+    assert sel.min_containment == 0.2
+
+
+def test_base_validation_applies():
+    """k < 1 should raise via BaseSelector validation."""
+    with pytest.raises(ValueError, match="k must be"):
+        ContainmentSelector(k=0)
+
+
+def test_returns_only_threshold_candidates(containment_mat):
+    """All returned prototypes clear the containment threshold for the query."""
+    sel = ContainmentSelector(k=6, min_containment=0.05)
+    result = sel.select(containment_mat, "s0")
+    assert all(containment_mat.loc["s0", r] >= 0.05 for r in result)

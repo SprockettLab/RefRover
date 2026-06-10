@@ -50,24 +50,29 @@ def sketch(manifest, outdir, ksize, scaled, threads, force):
 # ── select ────────────────────────────────────────────────────────────────────
 
 @main.command()
-@click.option("--sketches", required=True, type=click.Path(exists=True),
-              help="Directory of assembly .sig files")
+@click.option("--sketches", type=click.Path(exists=True),
+              help="Directory of assembly .sig files (Jaccard selectors)")
+@click.option("--containment-matrix", type=click.Path(exists=True),
+              help="Cross-sample containment matrix TSV (required for --selector containment)")
 @click.option("--manifest", required=True, type=click.Path(exists=True))
 @click.option("--selector", default="archetype", show_default=True,
-              type=click.Choice(["random", "maxmin", "kmedoids", "archetype", "greedy_var"]))
+              type=click.Choice(["random", "maxmin", "kmedoids", "archetype",
+                                 "greedy_var", "containment"]))
 @click.option("--k", default="5", show_default=True,
               help="Prototypes per sample, or 'auto' to infer from similarity structure")
 @click.option("--adaptive-k-method", default="similarity_gap", show_default=True,
               type=click.Choice(["scree_elbow", "similarity_gap", "saturation_curve"]))
-@click.option("--min-jaccard", default=0.1, show_default=True)
+@click.option("--min-jaccard", default=0.1, show_default=True,
+              help="Minimum similarity/containment floor for candidate assemblies")
 @click.option("--outdir", required=True, type=click.Path())
 @click.option("--force", is_flag=True)
-def select(sketches, manifest, selector, k, adaptive_k_method, min_jaccard, outdir, force):
+def select(sketches, containment_matrix, manifest, selector, k, adaptive_k_method,
+           min_jaccard, outdir, force):
     """Select prototype assemblies for each sample."""
     import pandas as pd
     from refrover.io import read_manifest, write_assignments
-    from refrover.selectors import SELECTOR_REGISTRY
-    from refrover.similarity import matrix_from_sigs
+    from refrover.selectors import SELECTOR_REGISTRY, CONTAINMENT_SELECTORS
+    from refrover.similarity import matrix_from_sigs, load_containment_matrix
 
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -79,13 +84,26 @@ def select(sketches, manifest, selector, k, adaptive_k_method, min_jaccard, outd
 
     df = read_manifest(manifest)
 
-    sig_dir = Path(sketches)
-    sig_paths = sorted(sig_dir.glob("*.sig"))
-    if not sig_paths:
-        raise click.ClickException(f"No .sig files found in {sketches}")
-
-    click.echo(f"Computing similarity matrix from {len(sig_paths)} sketches...")
-    sim_matrix = matrix_from_sigs(sig_paths)
+    # Containment selectors run on a reads-vs-assembly containment matrix;
+    # Jaccard selectors run on an assembly-vs-assembly matrix from the sketches.
+    if selector in CONTAINMENT_SELECTORS:
+        if not containment_matrix:
+            raise click.ClickException(
+                f"--selector {selector} requires --containment-matrix"
+            )
+        click.echo(f"Loading containment matrix from {containment_matrix}...")
+        sim_matrix = load_containment_matrix(containment_matrix)
+    else:
+        if not sketches:
+            raise click.ClickException(
+                f"--selector {selector} requires --sketches"
+            )
+        sig_dir = Path(sketches)
+        sig_paths = sorted(sig_dir.glob("*.sig"))
+        if not sig_paths:
+            raise click.ClickException(f"No .sig files found in {sketches}")
+        click.echo(f"Computing similarity matrix from {len(sig_paths)} sketches...")
+        sim_matrix = matrix_from_sigs(sig_paths)
 
     use_adaptive_k = (str(k).lower() == "auto")
     fixed_k = None if use_adaptive_k else int(k)
@@ -185,25 +203,39 @@ def format(coverage_dir, binners, outdir, force):
 @main.command()
 @click.option("--manifest", required=True, type=click.Path(exists=True))
 @click.option("--selector", default="archetype", show_default=True,
-              type=click.Choice(["random", "maxmin", "kmedoids", "archetype", "greedy_var"]))
+              type=click.Choice(["random", "maxmin", "kmedoids", "archetype",
+                                 "greedy_var", "containment"]))
 @click.option("--k", default=5, show_default=True)
-@click.option("--min-jaccard", default=0.1, show_default=True)
+@click.option("--min-jaccard", default=0.1, show_default=True,
+              help="Minimum similarity/containment floor for candidate assemblies")
+@click.option("--containment-matrix", type=click.Path(exists=True),
+              help="Cross-sample containment matrix TSV (required for --selector containment)")
 @click.option("--aligner", default="bwa-mem2", show_default=True,
               type=click.Choice(["bwa-mem2", "bwa", "minimap2"]))
 @click.option("--binners", default="generic", show_default=True)
 @click.option("--threads", default=8, show_default=True)
 @click.option("--outdir", required=True, type=click.Path())
 @click.option("--force", is_flag=True)
-def run(manifest, selector, k, min_jaccard, aligner, binners, threads, outdir, force):
+def run(manifest, selector, k, min_jaccard, containment_matrix, aligner, binners,
+        threads, outdir, force):
     """Run the full RefRover pipeline end-to-end."""
     from refrover.pipeline import RefRoverPipeline
     from refrover.io import read_manifest
-    from refrover.selectors import SELECTOR_REGISTRY
+    from refrover.selectors import SELECTOR_REGISTRY, CONTAINMENT_SELECTORS
+    from refrover.similarity import load_containment_matrix
 
     df = read_manifest(manifest)
     sel_cls = SELECTOR_REGISTRY[selector]
     sel = sel_cls(k=k, min_jaccard=min_jaccard)
     binner_list = [b.strip() for b in binners.split(",")]
+
+    cont_df = None
+    if selector in CONTAINMENT_SELECTORS:
+        if not containment_matrix:
+            raise click.ClickException(
+                f"--selector {selector} requires --containment-matrix"
+            )
+        cont_df = load_containment_matrix(containment_matrix)
 
     pipeline = RefRoverPipeline(
         manifest=df,
@@ -212,6 +244,7 @@ def run(manifest, selector, k, min_jaccard, aligner, binners, threads, outdir, f
         threads=threads,
         outdir=Path(outdir),
         force=force,
+        containment_matrix=cont_df,
     )
     results = pipeline.run()
     click.echo(f"Done. Coverage tables: {list(results.coverage_tables.keys())}")

@@ -38,6 +38,25 @@ def jaccard_to_distance(sim_matrix: pd.DataFrame) -> pd.DataFrame:
     return 1.0 - sim_matrix
 
 
+def load_containment_matrix(tsv_path: Path | str) -> pd.DataFrame:
+    """
+    Load a cross-sample containment matrix (TSV) for ContainmentSelector.
+
+    Expected layout (as written by compute_containment.py):
+      - First column: query sample_id (the row index).
+      - Remaining columns: one per candidate assembly, labelled by sample_id.
+      - Values: containment(reads_row, assembly_col) in [0, 1].
+
+    The matrix is square and labelled by sample_id on both axes, but need not be
+    symmetric (containment is directional). Returns a labelled DataFrame.
+    """
+    tsv_path = Path(tsv_path)
+    df = pd.read_csv(tsv_path, sep="\t", index_col=0)
+    df.index.name = None
+    df.columns.name = None
+    return df
+
+
 def filter_by_jaccard(
     sim_matrix: pd.DataFrame,
     query_id: str,
