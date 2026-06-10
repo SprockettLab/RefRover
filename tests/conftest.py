@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import pytest
+from pathlib import Path
 
 
 def _make_sim(matrix: np.ndarray, ids: list[str]) -> pd.DataFrame:
@@ -49,3 +50,30 @@ def sparse_sim():
     m[0, 1] = m[1, 0] = 0.3
     m[0, 2] = m[2, 0] = 0.2
     return _make_sim(m, ids)
+
+
+@pytest.fixture
+def coverage_df():
+    """
+    Minimal coverage DataFrame: 5 contigs x 3 samples + length column.
+    Matches the output format from CoverM (index=contig, columns=length + depth per sample).
+    """
+    contigs = [f"contig_{i}" for i in range(5)]
+    data = {
+        "length": [1000, 2000, 500, 3000, 1500],
+        "s1_depth": [10.2, 0.0, 5.5, 22.1, 8.8],
+        "s2_depth": [0.0, 15.3, 6.1, 18.9, 0.0],
+        "s3_depth": [7.7, 12.0, 0.0, 25.4, 3.3],
+    }
+    return pd.DataFrame(data, index=contigs)
+
+
+@pytest.fixture
+def tiny_manifest(tmp_path):
+    """Write a minimal valid manifest TSV and return its path."""
+    content = "sample_id\tassembly\tr1\n"
+    content += "S1\tassemblies/S1.fasta\treads/S1_R1.fastq.gz\n"
+    content += "S2\tassemblies/S2.fasta\treads/S2_R1.fastq.gz\n"
+    p = tmp_path / "manifest.tsv"
+    p.write_text(content)
+    return p
