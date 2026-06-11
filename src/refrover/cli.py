@@ -288,6 +288,54 @@ def run(manifest, selector, k, min_jaccard, containment_matrix, aligner, binners
     click.echo(f"Done. Coverage tables: {list(results.coverage_tables.keys())}")
 
 
+# ── rank-selectors ────────────────────────────────────────────────────────────
+
+@main.command(name="rank-selectors")
+@click.option("--sketches", type=click.Path(exists=True),
+              help="Directory of assembly .sig files (Jaccard matrix)")
+@click.option("--containment-matrix", type=click.Path(exists=True),
+              help="Cross-sample containment matrix TSV (alternative to --sketches)")
+@click.option("--selectors", default="random,maxmin,kmedoids,greedy_var,containment",
+              show_default=True, help="Comma-separated selector IDs to rank")
+@click.option("--k-range", default="3,5,8,10", show_default=True,
+              help="Comma-separated k values to test")
+@click.option("--min-jaccard", default=0.1, show_default=True,
+              help="Minimum similarity/containment floor for candidate assemblies")
+@click.option("--outdir", required=True, type=click.Path())
+def rank_selectors_cmd(sketches, containment_matrix, selectors, k_range, min_jaccard, outdir):
+    """Rank selectors by the alignment-free variance-explained proxy (Tier 1)."""
+    from refrover.benchmark import rank_selectors
+    from refrover.similarity import matrix_from_sigs, load_containment_matrix
+
+    if bool(sketches) == bool(containment_matrix):
+        raise click.ClickException(
+            "Provide exactly one of --sketches or --containment-matrix."
+        )
+
+    if containment_matrix:
+        matrix = load_containment_matrix(containment_matrix)
+    else:
+        sig_paths = sorted(Path(sketches).glob("*.sig"))
+        if not sig_paths:
+            raise click.ClickException(f"No .sig files found in {sketches}")
+        matrix = matrix_from_sigs(sig_paths)
+
+    selector_list = [s.strip() for s in selectors.split(",")]
+    k_list = [int(k.strip()) for k in k_range.split(",")]
+
+    ranking = rank_selectors(
+        matrix, selectors=selector_list, k_values=k_list, min_similarity=min_jaccard,
+    )
+
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    out_tsv = outdir / "selector_ranking.tsv"
+    ranking.to_csv(out_tsv, sep="\t", index=False)
+
+    click.echo(ranking.to_string(index=False))
+    click.echo(f"\nRanking → {out_tsv}")
+
+
 # ── benchmark ─────────────────────────────────────────────────────────────────
 
 @main.command()

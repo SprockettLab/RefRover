@@ -102,7 +102,15 @@ refrover select      --containment-matrix cont/containment_matrix.tsv \
                      --manifest samples.tsv --selector containment --k 5 --min-jaccard 0.05 \
                      --outdir assignments/
 
-# Benchmark selectors against each other on a dataset with known ground truth
+# Rank selectors cheaply (Tier 1): alignment-free variance-explained proxy
+refrover rank-selectors \
+    --containment-matrix cont/containment_matrix.tsv \
+    --selectors random,maxmin,kmedoids,greedy_var,containment \
+    --k-range 3,5,8,10 \
+    --outdir ranking/
+# (or --sketches sketches/ to rank on the Jaccard matrix instead)
+
+# Benchmark selectors by MAG yield (Tier 2): full pipeline + CheckM2 (not yet implemented)
 refrover benchmark \
     --manifest samples.tsv \
     --truth community_truth.tsv \
@@ -111,6 +119,8 @@ refrover benchmark \
     --checkm2-db /path/to/checkm2_db \
     --outdir benchmark_results/
 ```
+
+**Two-tier selector evaluation.** Tier 1 (`refrover rank-selectors`, `benchmark.rank_selectors`) ranks selectors in seconds with no alignment, by the fraction of total cross-sample variance the selected prototypes explain via orthogonal projection (correlated/redundant selections don't double-count). Tier 2 (`refrover benchmark`, not yet implemented) is the gold standard: CheckM2-passing MAGs per CPU-hour. The open research question is whether the Tier-1 ranking predicts the Tier-2 ranking — if so, selector choice can be made cheaply from Tier 1 alone.
 
 ### Input manifest format
 
