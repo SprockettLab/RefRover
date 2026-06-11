@@ -99,7 +99,8 @@ def containment(read_sketches, assembly_sketches, ksize, outdir, force):
 @click.option("--k", default="5", show_default=True,
               help="Prototypes per sample, or 'auto' to infer from similarity structure")
 @click.option("--adaptive-k-method", default="similarity_gap", show_default=True,
-              type=click.Choice(["scree_elbow", "similarity_gap", "saturation_curve"]))
+              type=click.Choice(["scree_elbow", "similarity_gap", "saturation_curve",
+                                 "containment_saturation"]))
 @click.option("--min-jaccard", default=0.1, show_default=True,
               help="Minimum similarity/containment floor for candidate assemblies")
 @click.option("--outdir", required=True, type=click.Path())

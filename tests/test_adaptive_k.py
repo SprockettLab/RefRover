@@ -1,7 +1,10 @@
 import pytest
 import numpy as np
 import pandas as pd
-from refrover.adaptive_k import estimate_k, _scree_elbow, _similarity_gap, _saturation_curve
+from refrover.adaptive_k import (
+    estimate_k, _scree_elbow, _similarity_gap, _saturation_curve,
+    _containment_saturation,
+)
 
 
 @pytest.fixture
@@ -47,10 +50,34 @@ def test_estimate_k_unknown_query(three_cluster_sim):
 
 
 def test_all_methods_return_valid_k(three_cluster_sim):
-    for method in ("scree_elbow", "similarity_gap", "saturation_curve"):
+    for method in ("scree_elbow", "similarity_gap", "saturation_curve",
+                   "containment_saturation"):
         k = estimate_k(three_cluster_sim, "s00", min_jaccard=0.01,
                        method=method, k_min=2, k_max=10)
         assert 2 <= k <= 10, f"{method} returned k={k} outside [2, 10]"
+
+
+def test_containment_saturation_finds_low_dim(three_cluster_sim):
+    """3-cluster data: the greedy residual-variance elbow should be small."""
+    ids = three_cluster_sim.columns.tolist()
+    k = _containment_saturation(three_cluster_sim, ids, k_min=1, k_max=12)
+    assert 1 <= k <= 6
+
+
+def test_containment_saturation_monotone_curve_threshold():
+    """
+    A matrix with one dominant variance axis and a long tail of tiny ones
+    should saturate after very few prototypes.
+    """
+    rng = np.random.default_rng(1)
+    n = 20
+    base = rng.normal(size=n)
+    cols = {"big0": base * 5.0, "big1": rng.normal(size=n) * 4.0}
+    for i in range(8):
+        cols[f"tiny{i}"] = base * 5.0 + 1e-4 * rng.normal(size=n)  # near-duplicates
+    df = pd.DataFrame(cols, index=[f"s{i}" for i in range(n)])
+    k = _containment_saturation(df, list(df.columns), k_min=1, k_max=10)
+    assert k <= 3  # only ~2 real axes of variation
 
 
 def test_similarity_gap_finds_natural_break():
