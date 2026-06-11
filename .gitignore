@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Editable install
+src/*.egg-info/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Type checking
+.mypy_cache/
+
+# Data and databases — large files not tracked (scripts are tracked)
+data/**/*.tsv
+data/**/*.csv
+data/**/*.pdf
+data/**/*.png
+data/**/*.txt
+data/**/gtdb_gather/
+data/**/gtdb_subdb/
+*.zip
+*.sbt.zip
+*.sig
+
+# macOS
+.DS_Store
+
+# Editors
+.vscode/
+.idea/

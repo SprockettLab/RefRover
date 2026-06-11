@@ -39,7 +39,7 @@ Each stage can be run independently (step-by-step mode) or the full pipeline run
 
 ## Selector strategies
 
-Six selection algorithms are implemented. All share the same interface (see `src/refrover/selectors/base.py`).
+Seven selection algorithms are implemented. All share the same interface (see `src/refrover/selectors/base.py`): `select(matrix, query_id) -> list[str]`, returning prototype sample_ids.
 
 | Strategy ID | Class | Description | Mathematical basis |
 |-------------|-------|-------------|-------------------|
@@ -48,7 +48,10 @@ Six selection algorithms are implemented. All share the same interface (see `src
 | `kmedoids` | `KMedoidsSelector` | k-medoids clustering in Jaccard space; medoids as prototypes | Minimizes within-cluster sum of distances |
 | `archetype` | `ArchetypeSelector` | Archetype analysis: finds assemblies on the convex hull of the similarity space | Cutler & Breiman (1994); extremes that span the space |
 | `greedy_var` | `GreedyVarSelector` | Greedy coverage-variance maximization: selects prototypes predicted to maximize cross-sample variance | Estimated via similarity proxy |
-| `feedback` | `FeedbackSelector` | Coverage-feedback: map → measure actual variance → iterate | Empirical; most accurate, most expensive |
+| `containment` | `ContainmentSelector` | MaxMin on cross-sample read **containment** profiles (not Jaccard); diversity in read-mapping space | Greedy distance maximization on 1 − Pearson(containment columns) |
+| `feedback` | `FeedbackSelector` | Coverage-feedback: map → measure actual variance → iterate | Empirical; most accurate, most expensive (not yet implemented) |
+
+**Containment vs. Jaccard selectors**: the Jaccard selectors operate on an assembly-vs-assembly similarity matrix; `containment` operates on a reads-vs-assembly containment matrix (`containment[i,j]` = fraction of sample i's read k-mers in assembly j), which directly measures how well reads will map. It is a `BaseSelector` subclass but is fed a different matrix — pass `--containment-matrix` (CLI) or `containment_matrix=` (`RefRoverPipeline`). On the rewilded-mouse validation it was the recommended strategy at small k. The matrix is produced by `data/mouse_rewilding/compute_containment.py` (slated to move into the package as `refrover.containment`).
 
 **Archetype vs. k-medoids distinction**: k-medoids finds central representatives; archetypes find extreme points that together span the full diversity space. For differential coverage, span is more valuable than centrality — archetypes are the theoretically preferred approach. Benchmark both.
 
@@ -93,7 +96,21 @@ refrover align    --assignments assignments.tsv --manifest samples.tsv --outdir 
 refrover coverage --bams bams/ --outdir raw_coverage/
 refrover format   --coverage raw_coverage/ --binners metabat2,semibin2 --outdir formatted/
 
-# Benchmark selectors against each other on a dataset with known ground truth
+# Containment-based selection (computes the reads-vs-assemblies matrix, then selects)
+refrover containment --read-sketches read_sigs/ --assembly-sketches sketches/ --outdir cont/
+refrover select      --containment-matrix cont/containment_matrix.tsv \
+                     --manifest samples.tsv --selector containment --k 5 --min-jaccard 0.05 \
+                     --outdir assignments/
+
+# Rank selectors cheaply (Tier 1): alignment-free variance-explained proxy
+refrover rank-selectors \
+    --containment-matrix cont/containment_matrix.tsv \
+    --selectors random,maxmin,kmedoids,greedy_var,containment \
+    --k-range 3,5,8,10 \
+    --outdir ranking/
+# (or --sketches sketches/ to rank on the Jaccard matrix instead)
+
+# Benchmark selectors by MAG yield (Tier 2): full pipeline + CheckM2 (not yet implemented)
 refrover benchmark \
     --manifest samples.tsv \
     --truth community_truth.tsv \
@@ -102,6 +119,8 @@ refrover benchmark \
     --checkm2-db /path/to/checkm2_db \
     --outdir benchmark_results/
 ```
+
+**Two-tier selector evaluation.** Tier 1 (`refrover rank-selectors`, `benchmark.rank_selectors`) ranks selectors in seconds with no alignment, by the fraction of total cross-sample variance the selected prototypes explain via orthogonal projection (correlated/redundant selections don't double-count). Tier 2 (`refrover benchmark`, not yet implemented) is the gold standard: CheckM2-passing MAGs per CPU-hour. The open research question is whether the Tier-1 ranking predicts the Tier-2 ranking — if so, selector choice can be made cheaply from Tier 1 alone.
 
 ### Input manifest format
 
@@ -175,7 +194,8 @@ refrover/
 │       ├── pipeline.py         # RefRoverPipeline orchestrator
 │       ├── io.py               # manifest read/write, validation
 │       ├── sketch.py           # sourmash wrapper (sketch + pairwise compare)
-│       ├── similarity.py       # similarity matrix operations, Jaccard filtering
+│       ├── similarity.py       # similarity matrix operations, Jaccard filtering, containment loader
+│       ├── containment.py      # reads-vs-assemblies containment matrix (feeds ContainmentSelector)
 │       ├── selectors/
 │       │   ├── __init__.py     # exports all selectors + SELECTOR_REGISTRY dict
 │       │   ├── base.py         # BaseSelector ABC: select(similarity_matrix, query_id) -> list[str]
