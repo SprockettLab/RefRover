@@ -137,7 +137,7 @@ Rules:
 - `assembly` is required for every row
 - At least one of `r1` or `long_reads` required
 - `r2` requires `r1`; absent `r2` = single-end short reads
-- Presence of both `r1` and `long_reads` = hybrid sample (aligns both, merges depth)
+- Presence of both `r1` and `long_reads` = hybrid sample (aligns both technologies into one BAM; total depth — see Key design decisions)
 
 ### Prototype assignment output (written by `refrover select`)
 
@@ -276,7 +276,7 @@ pytest tests/              # unit tests (all should pass without external tools 
 
 **Adaptive k (not yet implemented)**: The current selectors all require an explicit `--k`. The intended design: for each query, compute the marginal gain in predicted differential signal as k increases, and stop at the elbow. This requires a signal prediction model — deferred to after the fixed-k selectors are benchmarked.
 
-**Coverage merging for hybrid samples**: For samples with both short and long reads, align separately, then take the mean depth per contig weighted by read count. This is handled in `coverage.py`.
+**Hybrid samples (short + long reads)**: Merging happens at the **alignment** stage, not in `coverage.py`. Short reads are aligned with bwa-mem2/bwa (or minimap2 `sr`) and long reads with minimap2 `map-ont`; both alignment sets are written into a single sorted BAM per sample (see `align._merge_long_reads_bwa` and the hybrid branch of `align._align_minimap2`). CoverM then runs once per sample, so a contig's reported depth is the total depth across both technologies. This keeps one BAM per sample and a clean sample→BAM mapping, and because every sample is processed identically the relative cross-sample signal that differential binning depends on is preserved. We deliberately do **not** compute per-technology depths and combine them by a read-count-weighted mean: that needs separate CoverM passes and a sample→(short_bam, long_bam) mapping for no benefit to *relative* coverage. The one real advantage of separate passes — applying technology-appropriate read-identity filters (short reads map at higher identity than ONT) — is noted as future work.
 
 **Idempotent stages**: Each stage writes its output to a predictable path under `--outdir`. Re-running a stage skips existing outputs (file-existence check). The `--force` flag disables this.
 
