@@ -161,9 +161,7 @@ def _align_bwa(
                 raise RuntimeError(f"bwa mem failed:\n{result.stderr[:500]}")
 
         if pd.notna(long_reads):
-            _merge_long_reads_bwa(
-                sample_row, ref_fa, sam_path, work_dir, aligner_bin, samtools_bin, threads
-            )
+            _merge_long_reads_bwa(sample_row, ref_fa, sam_path, work_dir, threads)
 
     elif pd.notna(long_reads):
         # Long-reads only: fall through to minimap2
@@ -180,21 +178,24 @@ def _merge_long_reads_bwa(
     ref_fa: Path,
     short_sam: Path,
     work_dir: Path,
-    aligner_bin: str,
-    samtools_bin: str,
     threads: int,
+    minimap2_bin: str = "minimap2",
 ) -> None:
     """
-    For hybrid samples: align long reads with minimap2, merge with short-read SAM.
-    Modifies short_sam in place (appends long-read alignments).
+    For hybrid samples under a bwa aligner: align the long reads with minimap2
+    (bwa cannot map long reads) and append them to the short-read SAM, producing
+    one merged alignment per sample. Modifies short_sam in place.
     """
     long_sam = work_dir / "long.sam"
-    _run(
-        ["minimap2", "-ax", "map-ont", "-t", str(threads),
-         str(ref_fa), str(sample_row["long_reads"])],
-        "minimap2 long reads",
+    # _align_minimap2_preset redirects minimap2's SAM to long_sam; _run does not
+    # (it captures stdout), which is why the long alignments must go through the
+    # preset helper here.
+    _align_minimap2_preset(
+        minimap2_bin, ref_fa, [str(sample_row["long_reads"])], long_sam,
+        preset="map-ont", threads=threads,
     )
-    # Append long-read alignments (skip header lines that start with @)
+    # Append long-read alignments, skipping the long SAM's header (the short
+    # SAM already has a header for the same reference).
     with open(short_sam, "a") as fout, open(long_sam) as fin:
         for line in fin:
             if not line.startswith("@"):
