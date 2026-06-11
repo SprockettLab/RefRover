@@ -47,6 +47,44 @@ def sketch(manifest, outdir, ksize, scaled, threads, force):
     click.echo(f"Sketched {len(sig_paths)} assemblies → {outdir}")
 
 
+# ── containment ───────────────────────────────────────────────────────────────
+
+@main.command()
+@click.option("--read-sketches", required=True, type=click.Path(exists=True),
+              help="Directory of read .sig files (one per sample, stem = sample_id)")
+@click.option("--assembly-sketches", required=True, type=click.Path(exists=True),
+              help="Directory of assembly .sig files (one per sample, stem = sample_id)")
+@click.option("--ksize", default=31, show_default=True)
+@click.option("--outdir", required=True, type=click.Path())
+@click.option("--force", is_flag=True)
+def containment(read_sketches, assembly_sketches, ksize, outdir, force):
+    """Compute the cross-sample reads-vs-assemblies containment matrix."""
+    from refrover.containment import (
+        compute_containment_matrix, sigs_by_sample, write_containment_matrix,
+    )
+
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    out_tsv = outdir / "containment_matrix.tsv"
+
+    if out_tsv.exists() and not force:
+        click.echo(f"Containment matrix already exists at {out_tsv} (use --force to redo)")
+        return
+
+    read_sigs = sigs_by_sample(read_sketches)
+    asm_sigs = sigs_by_sample(assembly_sketches)
+    if not read_sigs:
+        raise click.ClickException(f"No .sig files found in {read_sketches}")
+    if not asm_sigs:
+        raise click.ClickException(f"No .sig files found in {assembly_sketches}")
+
+    click.echo(f"Computing containment: {len(read_sigs)} read × {len(asm_sigs)} "
+               f"assembly sketches...")
+    matrix = compute_containment_matrix(read_sigs, asm_sigs, ksize=ksize)
+    write_containment_matrix(matrix, out_tsv)
+    click.echo(f"Containment matrix ({matrix.shape[0]}×{matrix.shape[1]}) → {out_tsv}")
+
+
 # ── select ────────────────────────────────────────────────────────────────────
 
 @main.command()

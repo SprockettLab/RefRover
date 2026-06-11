@@ -96,6 +96,12 @@ refrover align    --assignments assignments.tsv --manifest samples.tsv --outdir 
 refrover coverage --bams bams/ --outdir raw_coverage/
 refrover format   --coverage raw_coverage/ --binners metabat2,semibin2 --outdir formatted/
 
+# Containment-based selection (computes the reads-vs-assemblies matrix, then selects)
+refrover containment --read-sketches read_sigs/ --assembly-sketches sketches/ --outdir cont/
+refrover select      --containment-matrix cont/containment_matrix.tsv \
+                     --manifest samples.tsv --selector containment --k 5 --min-jaccard 0.05 \
+                     --outdir assignments/
+
 # Benchmark selectors against each other on a dataset with known ground truth
 refrover benchmark \
     --manifest samples.tsv \
@@ -178,7 +184,8 @@ refrover/
 │       ├── pipeline.py         # RefRoverPipeline orchestrator
 │       ├── io.py               # manifest read/write, validation
 │       ├── sketch.py           # sourmash wrapper (sketch + pairwise compare)
-│       ├── similarity.py       # similarity matrix operations, Jaccard filtering
+│       ├── similarity.py       # similarity matrix operations, Jaccard filtering, containment loader
+│       ├── containment.py      # reads-vs-assemblies containment matrix (feeds ContainmentSelector)
 │       ├── selectors/
 │       │   ├── __init__.py     # exports all selectors + SELECTOR_REGISTRY dict
 │       │   ├── base.py         # BaseSelector ABC: select(similarity_matrix, query_id) -> list[str]
