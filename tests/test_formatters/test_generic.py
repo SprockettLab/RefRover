@@ -20,9 +20,10 @@ def test_generic_skips_existing(coverage_df, tmp_path):
 
 
 def test_generic_force_overwrites(coverage_df, tmp_path):
+    import time
     out1 = format_for_binner(coverage_df, binner="generic", outdir=tmp_path)
     mtime1 = out1.stat().st_mtime
-    import time; time.sleep(0.01)
+    time.sleep(0.01)
     out2 = format_for_binner(coverage_df, binner="generic", outdir=tmp_path, force=True)
     assert out2.stat().st_mtime >= mtime1
 

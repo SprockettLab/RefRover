@@ -28,3 +28,5 @@ where = ["src"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# Exploratory research/analysis scripts are not held to package lint standards.
+extend-exclude = ["data"]

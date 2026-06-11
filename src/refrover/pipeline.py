@@ -51,10 +51,15 @@ class RefRoverPipeline:
         from refrover.formatters import format_for_binner
 
         outdir = self.outdir
+        outdir.mkdir(parents=True, exist_ok=True)
         sketch_dir = outdir / "sketches"
         bam_dir = outdir / "bams"
         cov_dir = outdir / "coverage"
         fmt_dir = outdir / "formatted"
+
+        # 0. Record run provenance up front, so a params.json exists even if a
+        #    later stage fails.
+        self._write_provenance(outdir / "params.json")
 
         # 1-2. Build the selection matrix.
         # Containment selectors use a precomputed reads-vs-assembly containment
@@ -100,3 +105,25 @@ class RefRoverPipeline:
             coverage_tables[binner] = out if isinstance(out, Path) else out[0]
 
         return PipelineResults(coverage_tables=coverage_tables, assignments=assignments)
+
+    def _write_provenance(self, path: Path) -> None:
+        """Write a params.json capturing the run configuration for reproducibility."""
+        import json
+        from datetime import datetime, timezone
+
+        from refrover import __version__
+
+        sel = self.selector
+        params = {
+            "refrover_version": __version__,
+            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            "selector": type(sel).__name__,
+            "k": getattr(sel, "k", None),
+            "min_similarity": getattr(sel, "min_containment", getattr(sel, "min_jaccard", None)),
+            "binners": list(self.binners),
+            "threads": self.threads,
+            "n_samples": int(len(self.manifest)),
+            "uses_containment_matrix": self.containment_matrix is not None,
+            "force": self.force,
+        }
+        path.write_text(json.dumps(params, indent=2) + "\n")

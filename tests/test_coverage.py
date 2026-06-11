@@ -1,7 +1,6 @@
 """Tests for CoverM output normalization into RefRover's internal schema."""
 
 import pandas as pd
-import pytest
 
 from refrover.coverage import normalize_coverage, load_coverage
 

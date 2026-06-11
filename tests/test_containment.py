@@ -1,6 +1,5 @@
 """Tests for the package containment-matrix computation."""
 
-from pathlib import Path
 
 import pytest
 
