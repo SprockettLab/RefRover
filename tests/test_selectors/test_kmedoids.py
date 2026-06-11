@@ -1,4 +1,3 @@
-import pytest
 from refrover.selectors import KMedoidsSelector
 
 
@@ -29,5 +28,4 @@ def test_covers_clusters(clustered_sim):
     """k-medoids should select one representative from each cluster."""
     sel = KMedoidsSelector(k=3, min_jaccard=0.0)
     result = sel.select(clustered_sim, "s00")
-    cluster_of = lambda sid: int(sid[1:]) // 4
-    assert len({cluster_of(r) for r in result}) == 3
+    assert len({int(r[1:]) // 4 for r in result}) == 3

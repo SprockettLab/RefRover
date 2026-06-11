@@ -1,6 +1,3 @@
-import numpy as np
-import pandas as pd
-import pytest
 from refrover.selectors import MaxMinSelector
 
 
@@ -19,8 +16,7 @@ def test_selects_across_clusters(clustered_sim):
     """With k=3 and 3 clusters, MaxMin should pick one from each cluster."""
     sel = MaxMinSelector(k=3, min_jaccard=0.0)
     result = sel.select(clustered_sim, "s00")
-    cluster_of = lambda sid: int(sid[1:]) // 4
-    clusters_hit = {cluster_of(r) for r in result}
+    clusters_hit = {int(r[1:]) // 4 for r in result}
     assert len(clusters_hit) == 3
 
 

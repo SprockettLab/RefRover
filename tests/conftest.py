@@ -1,7 +1,6 @@
 import numpy as np
 import pandas as pd
 import pytest
-from pathlib import Path
 
 
 def _make_sim(matrix: np.ndarray, ids: list[str]) -> pd.DataFrame:

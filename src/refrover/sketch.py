@@ -3,7 +3,6 @@ Wrappers around sourmash for sketching assemblies and computing pairwise similar
 """
 
 import subprocess
-import sys
 from pathlib import Path
 from typing import Sequence
 
@@ -43,7 +42,6 @@ def sketch_assemblies(
 
     # sourmash sketch dna processes multiple files in one call
     fasta_list = [str(fa) for fa, _ in to_sketch]
-    sig_list = [str(sig) for _, sig in to_sketch]
 
     cmd = [
         sourmash_path, "sketch", "dna",

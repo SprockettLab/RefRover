@@ -280,6 +280,8 @@ pytest tests/              # unit tests (all should pass without external tools 
 
 **Idempotent stages**: Each stage writes its output to a predictable path under `--outdir`. Re-running a stage skips existing outputs (file-existence check). The `--force` flag disables this.
 
+**Run provenance**: `RefRoverPipeline.run()` writes `params.json` to `--outdir` up front (selector, k, min-similarity, binners, threads, sample count, refrover version, UTC timestamp), so a run's configuration is recoverable even if a later stage fails.
+
 **No Nextflow dependency**: RefRover is pure Python + subprocess calls. It has no Nextflow or nf-core dependency and can run in any environment where the external tools are available.
 
 ---

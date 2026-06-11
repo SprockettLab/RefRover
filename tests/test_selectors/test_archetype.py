@@ -22,8 +22,7 @@ def test_spans_clusters(clustered_sim):
     """Archetypes should select samples from all 3 distinct clusters."""
     sel = ArchetypeSelector(k=3, min_jaccard=0.0)
     result = sel.select(clustered_sim, "s00")
-    cluster_of = lambda sid: int(sid[1:]) // 4
-    assert len({cluster_of(r) for r in result}) == 3
+    assert len({int(r[1:]) // 4 for r in result}) == 3
 
 
 def test_valid_sample_ids(clustered_sim):
