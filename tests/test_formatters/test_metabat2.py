@@ -18,11 +18,25 @@ def test_metabat2_required_columns(coverage_df, tmp_path):
 def test_metabat2_variance_columns(coverage_df, tmp_path):
     out = format_for_binner(coverage_df, binner="metabat2", outdir=tmp_path)
     df = pd.read_csv(out, sep="\t")
-    # Each depth column must have a paired -var column set to 0
-    depth_cols = ["s1_depth", "s2_depth", "s3_depth"]
-    for col in depth_cols:
-        assert f"{col}-var" in df.columns
-        assert (df[f"{col}-var"] == 0.0).all()
+    # Each sample has a paired -var column carrying the real variance from the
+    # coverage table (not a zero placeholder).
+    for sample in ["s1", "s2", "s3"]:
+        assert sample in df.columns
+        assert f"{sample}-var" in df.columns
+        pd.testing.assert_series_equal(
+            df[f"{sample}-var"].reset_index(drop=True),
+            coverage_df[f"{sample}_var"].reset_index(drop=True),
+            check_names=False,
+        )
+
+
+def test_metabat2_variance_falls_back_to_zero_when_absent(coverage_df, tmp_path):
+    """A coverage table with no _var columns yields zero variance (back-compat)."""
+    means_only = coverage_df[["length", "s1_depth", "s2_depth", "s3_depth"]]
+    out = format_for_binner(means_only, binner="metabat2", outdir=tmp_path)
+    df = pd.read_csv(out, sep="\t")
+    for sample in ["s1", "s2", "s3"]:
+        assert (df[f"{sample}-var"] == 0.0).all()
 
 
 def test_metabat2_total_avg_depth(coverage_df, tmp_path):

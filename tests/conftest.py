@@ -55,8 +55,9 @@ def sparse_sim():
 @pytest.fixture
 def coverage_df():
     """
-    Minimal coverage DataFrame: 5 contigs x 3 samples + length column.
-    Matches the output format from CoverM (index=contig, columns=length + depth per sample).
+    Minimal coverage DataFrame in RefRover's normalized schema: 5 contigs x
+    3 samples, with a 'length' column, a '{sample}_depth' mean column, and a
+    paired '{sample}_var' variance column per sample.
     """
     contigs = [f"contig_{i}" for i in range(5)]
     data = {
@@ -64,6 +65,9 @@ def coverage_df():
         "s1_depth": [10.2, 0.0, 5.5, 22.1, 8.8],
         "s2_depth": [0.0, 15.3, 6.1, 18.9, 0.0],
         "s3_depth": [7.7, 12.0, 0.0, 25.4, 3.3],
+        "s1_var": [2.1, 0.0, 1.2, 4.4, 1.8],
+        "s2_var": [0.0, 3.3, 1.5, 3.9, 0.0],
+        "s3_var": [1.7, 2.4, 0.0, 5.1, 0.6],
     }
     return pd.DataFrame(data, index=contigs)
 

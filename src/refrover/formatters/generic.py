@@ -3,18 +3,19 @@
 from pathlib import Path
 import pandas as pd
 
+from ._columns import mean_columns
+
 
 def write_generic(coverage_df: pd.DataFrame, outdir: Path, force: bool = False) -> Path:
     """
-    Write a generic coverage TSV.
+    Write a generic coverage TSV: contig index, optional 'length', and one
+    mean-depth column per sample. Variance columns are omitted.
 
-    Input: DataFrame with index=contig, columns including 'length' and one depth
-    column per sample (e.g. 's001_depth').
-
-    Output: coverage_generic.tsv  — same layout, tab-separated.
+    Output: coverage_generic.tsv — tab-separated.
     """
     out = outdir / "coverage_generic.tsv"
     if out.exists() and not force:
         return out
-    coverage_df.to_csv(out, sep="\t")
+    cols = (["length"] if "length" in coverage_df.columns else []) + mean_columns(coverage_df)
+    coverage_df[cols].to_csv(out, sep="\t")
     return out

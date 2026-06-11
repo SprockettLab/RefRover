@@ -184,14 +184,14 @@ def coverage(bams, outdir, threads, force):
 def format(coverage_dir, binners, outdir, force):
     """Format coverage tables for downstream binners."""
     from refrover.formatters import format_for_binner
-    import pandas as pd
+    from refrover.coverage import load_coverage
 
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
     binner_list = [b.strip() for b in binners.split(",")]
     cov_tsv = Path(coverage_dir) / "coverage.tsv"
-    df = pd.read_csv(cov_tsv, sep="\t", index_col=0)
+    df = load_coverage(cov_tsv)
 
     for binner in binner_list:
         out = format_for_binner(df, binner=binner, outdir=outdir, force=force)

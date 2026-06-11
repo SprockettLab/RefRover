@@ -3,12 +3,14 @@
 from pathlib import Path
 import pandas as pd
 
+from ._columns import mean_columns, sample_of
+
 
 def write_maxbin2(coverage_df: pd.DataFrame, outdir: Path, force: bool = False) -> list[Path]:
-    depth_cols = [c for c in coverage_df.columns if c != "length"]
     out_paths = []
-    for col in depth_cols:
-        out = outdir / f"{col}.abund"
+    for col in mean_columns(coverage_df):
+        sample = sample_of(col)
+        out = outdir / f"{sample}.abund"
         out_paths.append(out)
         if out.exists() and not force:
             continue
