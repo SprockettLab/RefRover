@@ -1,23 +1,23 @@
 """
-Tier-2 MAG-yield benchmark orchestrator (PLAN.md §8, build sequencing step 2).
+MAG-quality benchmark orchestrator: the gold-standard evaluation of selection methods.
 
-Settles the open question Tier-1 could not: *which upstream proxy predicts real
-MAG yield?* For each ``(feature_space, rule, k, focal assembly)`` cell it runs the
-real pipeline — co-map selection → alignment → CoverM → MetaBAT2 → CheckM2 —
-counts quality-weighted MAGs, and records the Tier-1 proxy of the same selection
-so the two can be correlated downstream (`analysis.tier_correlation`).
+For each ``(matrix, rule, k, focal assembly)`` cell, runs the real pipeline —
+co-map selection → alignment → CoverM → MetaBAT2 → CheckM2 — and counts
+quality-weighted MAGs. Each cell also records the proxy scores (frac_variance,
+effective_rank, tiered_axis_count) for the same selection so they can be
+correlated with real MAG yield after the run.
 
-**Transpose / co-map design (locked with the user):** binning a focal assembly
-``A_f`` needs several samples' reads over its one contig set. "Pick k samples to
-co-map onto ``A_f``" is exactly ``rule.select(M.T, f)`` — the existing rules run
-on the *transposed* feature matrix with the focal assembly as the query. So
-selection + Tier-1 scoring reuse the Tier-1 stack verbatim on ``M.T``; only the
-downstream execution here is new.
+**Transpose / co-map design:** binning a focal assembly ``A_f`` needs several
+samples' reads over its contig set. "Pick k samples to co-map onto ``A_f``" is
+``rule.select(M.T, f)`` — the rules run on the *transposed* matrix with the focal
+assembly as the query. The proxy scores run on the same transposition.
 
 All external tools are subprocess-invoked (reusing `align._run`/`_sort_index`,
 `coverage.run_coverm`, `formatters.metabat2.write_metabat2`, `binning.run_metabat2`,
 `checkm2.run_checkm2`), so the harness is unit-testable with mocked subprocess and
-needs the tools only at real run time.
+needs the tools only at real run time. Use ``--shard i/N`` (1-based) to split the
+focal-assembly list across SLURM array tasks; call ``aggregate_results`` once all
+shards finish.
 """
 
 from __future__ import annotations
@@ -35,6 +35,7 @@ from refrover.binning import list_bins, run_metabat2
 from refrover.checkm2 import run_checkm2
 from refrover.coverage import load_coverage, run_coverm
 from refrover.formatters.metabat2 import write_metabat2
+from refrover.grid import FeatureSpaceSpec  # re-exported for CLI convenience
 from refrover.mag_quality import count_mags
 from refrover.rules import RULE_REGISTRY
 from refrover.scores import score_selection
@@ -93,7 +94,7 @@ def align_samples_to_focal(
 
 def run_cell(
     matrix_T: pd.DataFrame,
-    feature_space: str,
+    matrix_name: str,
     rule_name: str,
     k: int,
     focal: str,
@@ -112,23 +113,23 @@ def run_cell(
     force: bool = False,
 ) -> dict:
     """
-    Run one ``(feature_space, rule, k, focal)`` cell end-to-end → a result row.
+    Run one ``(matrix, rule, k, focal)`` cell end-to-end and return a result row.
 
-    Selects the co-map sample set on ``matrix_T`` (assemblies × samples), aligns
-    those samples onto the focal assembly, computes coverage, bins with MetaBAT2,
-    scores bins with CheckM2, and counts quality-weighted MAGs. Also records the
-    Tier-1 proxy family of the same co-map selection (``score_selection`` on
-    ``matrix_T``) and the compute spent. Idempotent: a finished cell's
+    Selects co-map samples on ``matrix_T`` (assemblies × samples), aligns them
+    onto the focal assembly, computes per-contig coverage, bins with MetaBAT2,
+    assesses quality with CheckM2, and counts quality-weighted MAGs. Proxy scores
+    (frac_variance, effective_rank, tiered_axis_count) are computed on the same
+    selection for later correlation with real MAG yield. Idempotent: an existing
     ``result.json`` is reused unless ``force``.
     """
-    cell_dir = Path(outdir) / feature_space / f"{rule_name}_k{k}" / focal
+    cell_dir = Path(outdir) / matrix_name / f"{rule_name}_k{k}" / focal
     result_json = cell_dir / "result.json"
     if result_json.exists() and not force:
         return json.loads(result_json.read_text())
     cell_dir.mkdir(parents=True, exist_ok=True)
 
     co_map = RULE_REGISTRY[rule_name](k=k, threshold=threshold).select(matrix_T, focal)
-    tier1 = score_selection(matrix_T, co_map)
+    proxy_scores = score_selection(matrix_T, co_map)
 
     t0 = time.perf_counter()
     bams = align_samples_to_focal(
@@ -154,13 +155,13 @@ def run_cell(
     wall = time.perf_counter() - t0
 
     row = {
-        "feature_space": feature_space,
+        "matrix": matrix_name,
         "rule": rule_name,
         "k": k,
         "focal": focal,
         "n_comap": len(co_map),
         **mags,
-        **tier1,
+        **proxy_scores,
         "wall_seconds": wall,
         "cpu_seconds": wall * threads,
     }
@@ -193,15 +194,16 @@ def run_pilot(
     **cell_kw,
 ) -> pd.DataFrame:
     """
-    Sweep the Tier-2 grid: feature_spaces × rules × k × focal assemblies.
+    Sweep the benchmark grid: matrices × rules × k × focal assemblies.
 
-    ``feature_spaces`` is a list of `grid.FeatureSpaceSpec` (the samples ×
-    assemblies matrices); each is transposed once for the co-map selection. A cell
-    is run via :func:`run_cell` (resumable). With ``shard='i/N'`` only that
-    round-robin slice of focals runs and the combined TSV is *not* written —
-    call :func:`aggregate_results` once all shards finish.
+    ``feature_spaces`` is a list of :class:`~refrover.grid.FeatureSpaceSpec`
+    (each wraps a samples × assemblies matrix, a name, and a candidate threshold).
+    Each matrix is transposed for the co-map selection. A cell is run via
+    :func:`run_cell` and is resumable. With ``shard='i/N'`` only that round-robin
+    slice of focals runs and the combined TSV is *not* written — call
+    :func:`aggregate_results` once all shards finish.
 
-    Returns the tidy results frame for the focals this call ran.
+    Returns a tidy DataFrame of all cells this call ran.
     """
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -226,18 +228,21 @@ def run_pilot(
 
     df = pd.DataFrame(rows)
     if shard is None:
-        df.to_csv(outdir / "tier2_results.tsv", sep="\t", index=False)
+        df.to_csv(outdir / "benchmark_results.tsv", sep="\t", index=False)
     return df
 
 
 def aggregate_results(outdir: Path | str) -> pd.DataFrame:
-    """Collect every cell's ``result.json`` under ``outdir`` into one tidy TSV."""
+    """Collect every cell's ``result.json`` under ``outdir`` into one tidy DataFrame."""
     outdir = Path(outdir)
     rows = [json.loads(p.read_text()) for p in sorted(outdir.rglob("result.json"))]
-    df = pd.DataFrame(rows)
-    if not df.empty:
-        df.to_csv(outdir / "tier2_results.tsv", sep="\t", index=False)
-    return df
+    return pd.DataFrame(rows)
 
 
-__all__ = ["align_samples_to_focal", "run_cell", "run_pilot", "aggregate_results"]
+__all__ = [
+    "FeatureSpaceSpec",
+    "align_samples_to_focal",
+    "run_cell",
+    "run_pilot",
+    "aggregate_results",
+]

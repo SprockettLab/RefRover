@@ -24,6 +24,8 @@ data/**/*.csv
 data/**/*.pdf
 data/**/*.png
 data/**/*.txt
+data/**/*.log
+data/**/*.md
 data/**/gtdb_gather/
 data/**/gtdb_subdb/
 *.zip

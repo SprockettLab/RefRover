@@ -1,23 +1,15 @@
 """
-Benchmark selector strategies against each other.
+Alignment-free proxy scoring for selection methods.
 
-Two tiers:
+For each (rule, k), runs the rule for every sample against the provided
+similarity/containment matrix and computes how much cross-sample variance the
+selected references explain, via orthogonal projection (correlated/redundant
+picks don't double-count). This ranks rules in seconds with no alignment.
 
-Tier 1 — variance-explained proxy (cheap, alignment-free).
-    For each (selector, k), run the selector for every sample and measure the
-    fraction of total cross-sample variance the selected prototypes explain,
-    via orthogonal projection of the full matrix onto the selected columns
-    (so correlated/redundant selections are not double-counted). This ranks
-    selectors in seconds from a similarity or containment matrix alone, with no
-    alignment. See rank_selectors().
-
-Tier 2 — MAG yield per CPU-hour (gold standard, expensive).
-    Run the full pipeline + a binner + CheckM2 and count passing MAGs per
-    compute. Not yet implemented (needs CheckM2 and a labelled community);
-    run_benchmark() is the entry point.
-
-The research question is whether the Tier-1 ranking predicts the Tier-2 ranking.
-If it does, selector choice can be made cheaply from Tier 1 alone.
+Use ``rank_selectors()`` here when you want a fast, cheap screen across rules
+before committing to the real benchmark (``mag_benchmark.run_pilot``). The
+research question is whether this proxy ranking predicts the real MAG-yield
+ranking from ``mag_benchmark``.
 """
 
 import warnings
@@ -28,15 +20,12 @@ import pandas as pd
 
 from refrover.selectors import SELECTOR_REGISTRY
 
-# Canonical implementation now lives in refrover.scores (the §6 score family).
-# Re-exported under its historical name for the existing CLI/tests that import it.
+# Canonical implementation lives in refrover.scores; re-exported here under the
+# historical name for existing callers.
 from refrover.scores import frac_variance as unique_variance_explained  # noqa: F401
 
-# Selectors that can't run unattended in a benchmark (unimplemented).
 _SKIP_SELECTORS = {"feedback"}
 DEFAULT_SELECTORS = ["random", "maxmin", "kmedoids", "archetype", "greedy_var", "containment"]
-
-
 
 
 def rank_selectors(
@@ -48,11 +37,11 @@ def rank_selectors(
     query_ids: list[str] | None = None,
 ) -> pd.DataFrame:
     """
-    Rank selectors by the Tier-1 variance-explained proxy on a single matrix.
+    Rank selection rules by the alignment-free variance-explained proxy.
 
-    The same matrix (Jaccard similarity or containment) is fed to every selector,
-    so the comparison is apples-to-apples. Selectors that can't run in the
-    environment (e.g. archetype without the `archetypes` package) are skipped
+    The same matrix (Jaccard similarity or containment) is fed to every rule,
+    so the comparison is apples-to-apples. Rules that can't run in the
+    environment (e.g. archetype without the ``archetypes`` package) are skipped
     with a warning rather than aborting the whole run.
 
     Returns a DataFrame: selector, k, mean_var_explained, median_var_explained,
@@ -71,20 +60,17 @@ def rank_selectors(
 
         for k in k_values:
             sel = cls(k=k, min_jaccard=min_similarity)
-            # Make the random baseline reproducible across the benchmark.
             if hasattr(sel, "seed") and getattr(sel, "seed") is None:
                 sel.seed = 0
 
             scores = []
             for q in query_ids:
                 with warnings.catch_warnings():
-                    warnings.simplefilter("ignore")  # fewer-than-k candidate notices
+                    warnings.simplefilter("ignore")
                     try:
                         chosen = sel.select(matrix, q)
                     except (ImportError, NotImplementedError) as exc:
-                        warnings.warn(
-                            f"Skipping selector '{name}': {exc}", stacklevel=2
-                        )
+                        warnings.warn(f"Skipping selector '{name}': {exc}", stacklevel=2)
                         selector_failed = True
                         break
                     except (KeyError, ValueError):
@@ -109,24 +95,3 @@ def rank_selectors(
     if not df.empty:
         df = df.sort_values(["k", "mean_var_explained"], ascending=[True, False])
     return df.reset_index(drop=True)
-
-
-def run_benchmark(
-    manifest: pd.DataFrame,
-    truth_path: Path | str,
-    selectors: list[str],
-    k_values: list[int],
-    outdir: Path | str,
-    threads: int = 8,
-    checkm2_db: Path | str | None = None,
-) -> pd.DataFrame:
-    """
-    Tier 2 — MAG yield per CPU-hour against a labelled ground-truth community.
-
-    For each (selector, k): run RefRoverPipeline, bin with MetaBAT2, evaluate with
-    CheckM2, and report passing MAGs per compute. Not yet implemented.
-    """
-    raise NotImplementedError(
-        "Tier-2 benchmark (CheckM2 MAG yield) not yet implemented. "
-        "Use rank_selectors() for the alignment-free Tier-1 variance proxy."
-    )

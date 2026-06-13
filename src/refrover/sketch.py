@@ -1,5 +1,5 @@
 """
-Wrappers around sourmash for sketching assemblies and computing pairwise similarity.
+Wrappers around sourmash for sketching assemblies and reads.
 """
 
 import subprocess
@@ -18,10 +18,11 @@ def sketch_assemblies(
     sourmash_path: str = "sourmash",
 ) -> list[Path]:
     """
-    Sketch each FASTA with sourmash sketch dna.
+    Sketch each assembly FASTA with sourmash sketch dna.
 
-    Returns a list of .sig paths (one per input), in the same order.
-    Skips existing .sig files unless force=True.
+    All FASTAs are processed in a single subprocess call (sourmash handles
+    batching internally). Skips already-existing .sig files unless force=True.
+    Returns one .sig path per input, in the same order.
     """
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -40,23 +41,75 @@ def sketch_assemblies(
     if not to_sketch:
         return all_sigs
 
-    # sourmash sketch dna processes multiple files in one call
-    fasta_list = [str(fa) for fa, _ in to_sketch]
+    cmd = [
+        sourmash_path, "sketch", "dna",
+        "-p", f"k={ksize},scaled={scaled}",
+        "--output-dir", str(outdir),
+    ] + [str(fa) for fa, _ in to_sketch]
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"sourmash sketch (assemblies) failed:\n{result.stderr}")
+
+    return all_sigs
+
+
+def sketch_reads(
+    sample_id: str,
+    read_files: Sequence[Path | str],
+    outdir: Path | str,
+    *,
+    ksize: int = 31,
+    scaled: int = 1000,
+    force: bool = False,
+    sourmash_path: str = "sourmash",
+) -> Path:
+    """
+    Sketch all reads from one sample into a single merged .sig.
+
+    Multiple read files (r1, r2, long_reads) are merged under ``sample_id`` so
+    containment(reads_i, assembly_j) is computed over all of a sample's reads.
+    Skips if the .sig already exists unless force=True.
+
+    Parameters
+    ----------
+    sample_id : str
+        Identifier used as both the sketch name and the output filename stem.
+    read_files : sequence of paths
+        FASTQ (or FASTQ.gz) files for this sample; None/empty-string entries
+        are silently skipped (handles optional r2 / long_reads columns).
+    outdir : path
+        Directory to write ``{sample_id}.sig`` into.
+
+    Returns
+    -------
+    Path
+        Path to the output .sig file.
+    """
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    sig_path = outdir / f"{sample_id}.sig"
+
+    if sig_path.exists() and not force:
+        return sig_path
+
+    inputs = [str(r) for r in read_files if r]
+    if not inputs:
+        raise ValueError(f"No read files provided for sample '{sample_id}'")
 
     cmd = [
         sourmash_path, "sketch", "dna",
-        f"--param-string=k={ksize},scaled={scaled}",
-        "--output-dir", str(outdir),
         "-p", f"k={ksize},scaled={scaled}",
-    ] + fasta_list
+        "--merge", sample_id,
+        "--output", str(sig_path),
+    ] + inputs
 
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         raise RuntimeError(
-            f"sourmash sketch failed:\n{result.stderr}"
+            f"sourmash sketch (reads) failed for '{sample_id}':\n{result.stderr}"
         )
-
-    return all_sigs
+    return sig_path
 
 
 def compare_sketches(
@@ -68,10 +121,11 @@ def compare_sketches(
     sourmash_path: str = "sourmash",
 ) -> Path:
     """
-    Run sourmash compare on a list of .sig files to get a pairwise CSV matrix.
+    Run sourmash compare on a list of .sig files → pairwise Jaccard CSV.
 
-    Returns the path to the output CSV.
-    Raises RuntimeError on failure.
+    For a labeled DataFrame (sample_id on both axes) use
+    ``refrover jaccard`` (CLI) or ``feature_spaces.jaccard_matrix()`` instead;
+    this function is a thin sourmash compare wrapper kept for scripting.
     """
     output_csv = Path(output_csv)
     if output_csv.exists() and not force:
@@ -87,8 +141,6 @@ def compare_sketches(
 
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        raise RuntimeError(
-            f"sourmash compare failed:\n{result.stderr}"
-        )
+        raise RuntimeError(f"sourmash compare failed:\n{result.stderr}")
 
     return output_csv
