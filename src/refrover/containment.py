@@ -25,10 +25,32 @@ def _load_minhash(sig_path: Path | str, ksize: int):
     return sig.minhash
 
 
+# Intermediate suffixes added by common assemblers before the file extension.
+# e.g. megahit: "sample.contigs.fasta" -> strip ".contigs" -> sample_id "sample"
+_ASSEMBLER_SUFFIXES = (".contigs", ".scaffolds", ".assembly", ".final", ".fa", ".fasta", ".fna")
+
+
+def _sig_stem(p: Path) -> str:
+    """
+    Derive sample_id from a .sig filename by stripping the .sig extension and
+    any assembler-specific intermediate suffix (e.g. '.contigs' from megahit).
+    """
+    stem = p.stem  # removes ".sig"
+    for suffix in _ASSEMBLER_SUFFIXES:
+        if stem.endswith(suffix):
+            stem = stem[: -len(suffix)]
+            break
+    return stem
+
+
 def sigs_by_sample(sketch_dir: Path | str) -> dict[str, Path]:
-    """Map sample_id -> .sig path for every sketch in a directory (stem = id)."""
+    """Map sample_id -> .sig path for every sketch in a directory.
+
+    The sample_id is the filename stem after stripping the .sig extension and
+    any assembler-specific intermediate suffix (e.g. megahit's '.contigs').
+    """
     sketch_dir = Path(sketch_dir)
-    return {p.stem: p for p in sorted(sketch_dir.glob("*.sig"))}
+    return {_sig_stem(p): p for p in sorted(sketch_dir.glob("*.sig"))}
 
 
 def compute_containment_matrix(

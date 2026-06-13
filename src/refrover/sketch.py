@@ -27,29 +27,39 @@ def sketch_assemblies(
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    to_sketch: list[tuple[Path, Path]] = []
+    # Assembler-specific intermediate suffixes to strip when naming the .sig.
+    # e.g. megahit writes "sample.contigs.fasta"; we want "sample.sig" not
+    # "sample.contigs.sig" so the sample_id in the matrix matches the manifest.
+    _asm_suffixes = (".contigs", ".scaffolds", ".assembly", ".final")
+
+    def _clean_stem(fa: Path) -> str:
+        stem = fa.stem  # removes .fasta / .fa / .fna
+        for suf in _asm_suffixes:
+            if stem.endswith(suf):
+                return stem[: -len(suf)]
+        return stem
+
     all_sigs: list[Path] = []
 
     for fa in fasta_paths:
         fa = Path(fa)
-        sig_path = outdir / (fa.stem + ".sig")
+        sig_path = outdir / f"{_clean_stem(fa)}.sig"
         all_sigs.append(sig_path)
         if sig_path.exists() and not force:
             continue
-        to_sketch.append((fa, sig_path))
 
-    if not to_sketch:
-        return all_sigs
-
-    cmd = [
-        sourmash_path, "sketch", "dna",
-        "-p", f"k={ksize},scaled={scaled}",
-        "--output-dir", str(outdir),
-    ] + [str(fa) for fa, _ in to_sketch]
-
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise RuntimeError(f"sourmash sketch (assemblies) failed:\n{result.stderr}")
+        # One subprocess call per file so we control the output filename.
+        cmd = [
+            sourmash_path, "sketch", "dna",
+            "-p", f"k={ksize},scaled={scaled}",
+            "--output", str(sig_path),
+            str(fa),
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"sourmash sketch (assemblies) failed for {fa.name}:\n{result.stderr}"
+            )
 
     return all_sigs
 
