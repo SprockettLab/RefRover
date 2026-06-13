@@ -1,0 +1,36 @@
+# RefRover Tier-2 environment: alignment + coverage + binning tools, plus the
+# RefRover Python stack. All external tools are subprocess-invoked by the harness,
+# so this env just needs them on PATH (CheckM2 is split into environment-checkm2.yml
+# because its ML deps don't co-solve cleanly here).
+#
+# Create (Linux / HPC — everything resolves natively):
+#   conda env create -f environment-tier2.yml
+#   conda activate refrover-tier2
+#   pip install -e .
+#
+# Apple Silicon (arm64) note: bwa-mem2 (and some others) lack osx-arm64 builds.
+# Create the env under x86 emulation (Rosetta) instead:
+#   CONDA_SUBDIR=osx-64 conda env create -f environment-tier2.yml
+# Real alignment/binning is best run on the Linux HPC; on the Mac, prefer the
+# mocked unit tests (pytest) and only the smallest staged smoke under Rosetta.
+name: refrover-tier2
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.11
+  # external pipeline tools (subprocess-invoked)
+  - bwa-mem2
+  - bwa            # fallback aligner
+  - minimap2       # long/hybrid
+  - samtools
+  - coverm
+  - metabat2
+  # RefRover Python stack
+  - sourmash
+  - pandas
+  - numpy
+  - scipy
+  - scikit-learn
+  - click
+  - pip

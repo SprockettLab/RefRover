@@ -1,0 +1,19 @@
+# CheckM2 in its own env (its lightgbm/diamond/sklearn pins conflict-resolve badly
+# alongside the alignment/binning tools). The Tier-2 harness calls it via subprocess,
+# so it only needs to be reachable — point the harness at it with
+# `--checkm2-path $(conda run -n checkm2 which checkm2)` or activate this env for the
+# CheckM2 step in the Slurm script.
+#
+# Create:
+#   conda env create -f environment-checkm2.yml
+#   conda activate checkm2
+#   checkm2 database --download --path <db_dir>   # ~3.6 GB DIAMOND db (one-time)
+#
+# Then pass the db to the harness via --checkm2-db <db_dir>/CheckM2_database/uniref100.KO.1.dmnd
+name: checkm2
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.10
+  - checkm2
