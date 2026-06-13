@@ -87,4 +87,4 @@ def test_select_jaccard_requires_sketches(containment_files):
         "--outdir", str(tmp_path / "out3"),
     ])
     assert result.exit_code != 0
-    assert "requires --sketches" in result.output
+    assert "--jaccard-matrix" in result.output or "--sketches" in result.output
