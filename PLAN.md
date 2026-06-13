@@ -105,6 +105,31 @@ cell." This makes GTDB select the same unit (assemblies) as the other two, on th
 same scoreboard. It's essentially a taxonomy-mediated, low-rank version of the
 containment matrix. This is the one piece of genuinely new construction work.
 
+Both inputs come from `sourmash gather`: the **reads** side (`samples × taxa`,
+`run_gtdb_gather.py` → `gtdb_species_matrix.tsv`) and the **assemblies** side
+(`assemblies × taxa`, `run_assembly_gather.py` → `gtdb_assembly_matrix.tsv`).
+`feature_spaces.gtdb_abundance_matrix(sample_taxa, assembly_taxa)` consumes both;
+`load_gtdb_species_matrix()` loads either (identical taxa-major TSV layout). When
+`assembly_taxa` is omitted it falls back to the reads matrix as a 1:1 proxy
+(M = B·Bᵀ), which runs with no assembly-side gather but conflates "in the sample"
+with "in the assembly" — use the real `gtdb_assembly_matrix.tsv` whenever it exists.
+
+> **⚠️ Sub-DB caveat — must validate (do not ship on this alone).** Both gathers
+> currently run against a **community sub-database** (`gtdb_subdb/community_species.zip`,
+> ~2k sigs) distilled by `build_community_subdb.py` from **5 representative
+> samples** gathered against full GTDB, not against the full 143k-sig DB. This is a
+> ~60× speedup but it is **circular and dataset-specific**: the 5 reps are chosen
+> by the very "which samples represent the community" question this whole project
+> exists to answer, and on a cohort *not* dominated by a few well-sampled taxa the
+> sub-DB can silently truncate the taxa catalogue — taxa present only in
+> non-representative samples never enter the DB, so they vanish from *every*
+> sample's profile (reads and assemblies alike). RefRover targets a wide range of
+> datasets, many of which 5 samples will not span, so **the sub-DB is a local
+> optimization for the mouse set, not part of the method.** Before any sub-DB
+> result is trusted: re-run both gathers with `--full-db` and confirm the bridge
+> matrix (and the downstream selector ranking) is unchanged within tolerance. See
+> §10 open question 6. Until validated, treat sub-DB numbers as provisional.
+
 ---
 
 ## 4. The unified representation (what makes the grid clean)
@@ -295,3 +320,17 @@ the per-sample features — arbitrate.** Divergence is where the science is.
    *which* samples (the heterogeneous-dataset hypothesis)?
 5. **Feedback selector** (map → measure → iterate) — still the most accurate, most
    expensive; revisit only if Tier-1 proxies prove unreliable.
+6. **GTDB sub-DB vs full-DB (validation, blocking before any GTDB claim).** Does
+   the 5-rep community sub-database (§3.1 caveat) recover the same taxa profiles —
+   and the same selector ranking — as the full 143k-sig GTDB? Run both gathers
+   with `--full-db` and diff. The deeper question is whether a sub-DB built from
+   *any* small sample subset is sound on heterogeneous cohorts, or whether the
+   full DB (or a non-circular catalogue construction) is required in general.
+   **HPC note:** the full-DB run is ~26 min/sample → ~80 h serial for 182
+   assemblies, so it must be parallelized. The per-sample gather is embarrassingly
+   parallel and `run_assembly_gather.py` decouples aggregation (`--aggregate-only`)
+   from gather, but it is **not yet HPC-ready**: there is no shard/stride flag to
+   assign disjoint samples to array tasks (only a `--n-samples` prefix), so N
+   concurrent instances would race on the same outputs. Needs a `--shard i/N`
+   (or explicit sample-list) option + a Slurm/array-job wrapper before the
+   full-DB validation can run on a cluster.

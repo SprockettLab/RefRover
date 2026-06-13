@@ -28,40 +28,15 @@ import pandas as pd
 
 from refrover.selectors import SELECTOR_REGISTRY
 
+# Canonical implementation now lives in refrover.scores (the §6 score family).
+# Re-exported under its historical name for the existing CLI/tests that import it.
+from refrover.scores import frac_variance as unique_variance_explained  # noqa: F401
+
 # Selectors that can't run unattended in a benchmark (unimplemented).
 _SKIP_SELECTORS = {"feedback"}
 DEFAULT_SELECTORS = ["random", "maxmin", "kmedoids", "archetype", "greedy_var", "containment"]
 
 
-def unique_variance_explained(matrix: pd.DataFrame, selected_ids: list[str]) -> float:
-    """
-    Fraction of total cross-sample column variance explained by selected columns.
-
-    The full matrix (samples × features) is mean-centred; the selected columns
-    span a subspace; we project all columns onto it and report
-    (total_var − residual_var) / total_var. Orthogonal projection means columns
-    correlated with the selected set count once, not multiple times — so this
-    rewards prototypes that span independent axes of variation rather than
-    piling onto the same one.
-
-    Returns a value in [0, 1] (1.0 when the selected columns span the column
-    space, e.g. all columns selected).
-    """
-    cols = list(matrix.columns)
-    pos = {c: i for i, c in enumerate(cols)}
-    idx = [pos[s] for s in selected_ids if s in pos]
-
-    X = matrix.to_numpy(dtype=float)
-    X = X - X.mean(axis=0)
-    total_var = float(np.var(X, axis=0, ddof=1).sum())
-    if total_var == 0.0 or not idx:
-        return 0.0
-
-    Xp = X[:, idx]
-    Q, _ = np.linalg.qr(Xp)  # orthonormal basis for the selected subspace
-    resid = X - Q @ (Q.T @ X)
-    resid_var = float(np.var(resid, axis=0, ddof=1).sum())
-    return (total_var - resid_var) / total_var
 
 
 def rank_selectors(
