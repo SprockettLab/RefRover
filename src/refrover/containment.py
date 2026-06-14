@@ -33,13 +33,20 @@ _ASSEMBLER_SUFFIXES = (".contigs", ".scaffolds", ".assembly", ".final", ".fa", "
 def _sig_stem(p: Path) -> str:
     """
     Derive sample_id from a .sig filename by stripping the .sig extension and
-    any assembler-specific intermediate suffix (e.g. '.contigs' from megahit).
+    any assembler-specific intermediate suffixes (e.g. '.contigs.fasta' from megahit).
+
+    Strips iteratively so multi-suffix names like '202.contigs.fasta.sig' resolve
+    to '202', not '202.contigs'.
     """
     stem = p.stem  # removes ".sig"
-    for suffix in _ASSEMBLER_SUFFIXES:
-        if stem.endswith(suffix):
-            stem = stem[: -len(suffix)]
-            break
+    changed = True
+    while changed:
+        changed = False
+        for suffix in _ASSEMBLER_SUFFIXES:
+            if stem.endswith(suffix):
+                stem = stem[: -len(suffix)]
+                changed = True
+                break
     return stem
 
 
