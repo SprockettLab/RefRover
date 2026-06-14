@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import subprocess
 import time
+import traceback
 import warnings
 from pathlib import Path
 
@@ -132,39 +133,63 @@ def run_cell(
     proxy_scores = score_selection(matrix_T, co_map)
 
     t0 = time.perf_counter()
-    bams = align_samples_to_focal(
-        assemblies[focal], co_map, manifest, cell_dir / "bams",
-        threads=threads, aligner_bin=aligner_bin, samtools_bin=samtools_bin, force=force,
-    )
-    run_coverm(bams, cell_dir / "coverage", threads=threads, force=force)
-    cov_df = load_coverage(cell_dir / "coverage" / "coverage.tsv")
-    depth_txt = write_metabat2(cov_df, cell_dir, force=force)
-    bins_dir = run_metabat2(
-        assemblies[focal], depth_txt, cell_dir / "bins",
-        min_contig=min_contig, threads=threads, force=force, metabat2_path=metabat2_path,
-    )
-
-    if list_bins(bins_dir):
-        quality = run_checkm2(
-            bins_dir, cell_dir / "checkm2", db_path=checkm2_db,
-            threads=threads, force=force, checkm2_path=checkm2_path,
+    try:
+        bams = align_samples_to_focal(
+            assemblies[focal], co_map, manifest, cell_dir / "bams",
+            threads=threads, aligner_bin=aligner_bin, samtools_bin=samtools_bin, force=force,
         )
-    else:
-        quality = pd.DataFrame({"Completeness": [], "Contamination": []})
-    mags = count_mags(quality)
-    wall = time.perf_counter() - t0
+        run_coverm(bams, cell_dir / "coverage", threads=threads, force=force)
+        cov_df = load_coverage(cell_dir / "coverage" / "coverage.tsv")
+        depth_txt = write_metabat2(cov_df, cell_dir, force=force)
+        bins_dir = run_metabat2(
+            assemblies[focal], depth_txt, cell_dir / "bins",
+            min_contig=min_contig, threads=threads, force=force, metabat2_path=metabat2_path,
+        )
 
-    row = {
-        "matrix": matrix_name,
-        "rule": rule_name,
-        "k": k,
-        "focal": focal,
-        "n_comap": len(co_map),
-        **mags,
-        **proxy_scores,
-        "wall_seconds": wall,
-        "cpu_seconds": wall * threads,
-    }
+        if list_bins(bins_dir):
+            quality = run_checkm2(
+                bins_dir, cell_dir / "checkm2", db_path=checkm2_db,
+                threads=threads, force=force, checkm2_path=checkm2_path,
+            )
+        else:
+            quality = pd.DataFrame({"Completeness": [], "Contamination": []})
+        mags = count_mags(quality)
+        wall = time.perf_counter() - t0
+
+        row = {
+            "matrix": matrix_name,
+            "rule": rule_name,
+            "k": k,
+            "focal": focal,
+            "n_comap": len(co_map),
+            **mags,
+            **proxy_scores,
+            "wall_seconds": wall,
+            "cpu_seconds": wall * threads,
+            "error": None,
+        }
+    except Exception as exc:
+        wall = time.perf_counter() - t0
+        tb = traceback.format_exc()
+        error_json = cell_dir / "error.json"
+        row = {
+            "matrix": matrix_name,
+            "rule": rule_name,
+            "k": k,
+            "focal": focal,
+            "n_comap": len(co_map),
+            "error": str(exc),
+            "traceback": tb,
+            "wall_seconds": wall,
+        }
+        error_json.write_text(json.dumps(row, indent=2))
+        warnings.warn(
+            f"Cell ({matrix_name}, {rule_name}, k={k}, focal={focal}) failed: {exc}\n"
+            f"Details → {error_json}",
+            stacklevel=2,
+        )
+        return row
+
     result_json.write_text(json.dumps(row))
     return row
 
@@ -233,9 +258,13 @@ def run_pilot(
 
 
 def aggregate_results(outdir: Path | str) -> pd.DataFrame:
-    """Collect every cell's ``result.json`` under ``outdir`` into one tidy DataFrame."""
+    """Collect every cell's ``result.json`` (and ``error.json``) under ``outdir``."""
     outdir = Path(outdir)
-    rows = [json.loads(p.read_text()) for p in sorted(outdir.rglob("result.json"))]
+    rows = []
+    for p in sorted(outdir.rglob("result.json")):
+        rows.append(json.loads(p.read_text()))
+    for p in sorted(outdir.rglob("error.json")):
+        rows.append(json.loads(p.read_text()))
     return pd.DataFrame(rows)
 
 

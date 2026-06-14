@@ -505,10 +505,32 @@ def aggregate_results_cmd(outdir, out_tsv):
     out_tsv = Path(out_tsv) if out_tsv else Path(outdir) / "benchmark_results.tsv"
     df = aggregate_results(outdir)
     if df.empty:
-        click.echo("No result.json files found — has the benchmark started?")
-        return
+        # Help the user distinguish "nothing ran" from "everything errored".
+        import subprocess as _sp
+        n_cells = len(list(Path(outdir).rglob("result.json")))
+        n_err   = len(list(Path(outdir).rglob("error.json")))
+        n_depth = len(list(Path(outdir).rglob("depth.txt")))
+        click.echo(
+            f"No output files found under {outdir}\n"
+            f"  result.json files: {n_cells}\n"
+            f"  error.json files:  {n_err}\n"
+            f"  depth.txt files:   {n_depth}  (cells that reached MetaBAT2 input stage)\n"
+            f"\nIf depth.txt > 0 but error.json = 0, the process was killed "
+            f"before the error handler ran (OOM, walltime, missing tool). "
+            f"Check SLURM logs or run one cell interactively:\n"
+            f"  refrover benchmark --manifest samples.tsv "
+            f"--jaccard-matrix work/matrices/jaccard_matrix.tsv "
+            f"--assemblies-dir <asm_dir> --rules random --k-range 3 "
+            f"--focals focals_1.txt --outdir work/benchmark_debug --force"
+        )
+        raise SystemExit(1)
+    errors = df[df.get("error", pd.Series(dtype=object)).notna()] if "error" in df.columns else df.iloc[0:0]
+    ok = df[~df.index.isin(errors.index)]
+    click.echo(f"{len(ok)} cells succeeded, {len(errors)} failed → {out_tsv}")
+    if not errors.empty:
+        click.echo("\nFailed cells:")
+        click.echo(errors[["matrix", "rule", "k", "focal", "error"]].to_string(index=False))
     df.to_csv(out_tsv, sep="\t", index=False)
-    click.echo(f"{len(df)} cells aggregated → {out_tsv}")
 
 
 # ── run ───────────────────────────────────────────────────────────────────────
