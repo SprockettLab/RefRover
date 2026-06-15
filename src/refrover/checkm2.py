@@ -12,6 +12,7 @@ conda env) and its DIAMOND database via ``db_path``.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -70,7 +71,15 @@ def run_checkm2(
     if force:
         cmd.append("--force")
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    # When checkm2_path is absolute (from a separate conda env), its sibling
+    # tools (prodigal, diamond) live in the same bin/ directory but aren't on
+    # the caller's PATH. Prepend that directory so checkm2 can find them.
+    env = os.environ.copy()
+    checkm2_bin = Path(checkm2_path)
+    if checkm2_bin.is_absolute():
+        env["PATH"] = str(checkm2_bin.parent) + os.pathsep + env.get("PATH", "")
+
+    result = subprocess.run(cmd, capture_output=True, text=True, env=env)
     if result.returncode != 0:
         raise RuntimeError(f"CheckM2 failed:\n{result.stderr}")
     if not report.exists():
