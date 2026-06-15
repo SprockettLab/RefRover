@@ -1,9 +1,10 @@
 # PLAN.md — RefRover research roadmap & restart spec
 
-> Status: **active restart (2026-06).** This document supersedes the ad-hoc
-> selector design described in `CLAUDE.md`. Where the two disagree, PLAN.md is
-> the source of truth for *what we are building next*; CLAUDE.md still describes
-> the pipeline plumbing (sketch → align → coverage → format) accurately.
+> Status: **Tier-1 complete; Tier-2 actively running (2026-06).** This document
+> supersedes the ad-hoc selector design described in `CLAUDE.md`. Where the two
+> disagree, PLAN.md is the source of truth for *what we are building next*;
+> CLAUDE.md still describes the pipeline plumbing (sketch → align → coverage →
+> format) accurately.
 >
 > The existing per-sample selectors (`src/refrover/selectors/`), the containment
 > matrix (`containment.py`), and the variance-explained proxy
@@ -275,15 +276,81 @@ the per-sample features — arbitrate.** Divergence is where the science is.
 
 ## 8. Two-tier evaluation
 
-- **Tier 1 — upstream, alignment-free (THIS ROUND).** Build the
-  `(feature × rule × k)` grid, the per-sample score family (§6), the per-sample
-  feature analysis (§7), and overlap. Fast iteration on the mouse data. **No
-  binning.**
-- **Tier 2 — downstream, gold standard (DEFERRED).** Run the real pipeline +
-  MetaBAT2 + CheckM2; count quality-weighted MAGs per CPU-hour. The open question
-  Tier 1 sets up: **does any Tier-1 proxy predict the Tier-2 ranking?** If yes,
-  selection can be chosen cheaply from Tier 1 alone, forever. `benchmark.run_benchmark`
-  is the stub entry point.
+- **Tier 1 — upstream, alignment-free (COMPLETE on AMY1).** The
+  `(feature × rule × k)` grid, per-sample score family (§6), and overlap are
+  implemented and have been run on the AMY1 dataset (63 samples, 2 feature spaces,
+  6 rules, k ∈ {3,5,8,10}). See §11 for empirical findings.
+- **Tier 2 — downstream, gold standard (ACTIVELY RUNNING on AMY1).** The full
+  pipeline (align → CoverM → MetaBAT2 → CheckM2) runs via `refrover benchmark`
+  with SLURM sharding (16 parallel shards × 4 threads). Current run: Jaccard
+  feature space, rules = random/maxmin/css, k ∈ {3,5,8,10}, 63 focal assemblies
+  (756 cells total). A second run with all 6 rules across both matrices is
+  planned once the first completes. Primary yield metric: `sum_qs` (Σ max(0,
+  completeness − 5×contamination), Olm et al. 2017 ISME J); `weighted_mags` kept
+  for comparison. The central open question: **does any Tier-1 proxy predict the
+  Tier-2 ranking?**
+
+---
+
+## 11. AMY1 empirical Tier-1 findings (2026-06)
+
+Dataset: 63 samples (AMY1 cohort, BRC BioHPC `cbsupoole`). Both feature spaces
+built from sourmash k=31 scaled=1000 sketches. `refrover rank-selectors` run with
+6 rules × k ∈ {3,5,8,10} × 2 matrices.
+
+### 11.1 Containment matrix explains ~3× more variance than Jaccard
+
+At k=10, the best rule (css) achieves frac_variance = **0.685** on containment
+vs **0.248** on Jaccard. This is consistent with containment directly measuring
+read-mapping affinity while Jaccard measures assembly-level k-mer overlap — a
+noisier proxy for the same thing. Implication: Tier-2 benchmark cells run on the
+containment feature space should produce higher MAG yields. This is an empirical
+prediction to verify.
+
+### 11.2 The frac_variance vs tiered_axis_count disagreement (the MaxMin paradox)
+
+The two proxy metrics give opposite rankings for `maxmin`:
+
+| Metric at k=10 | Winner | Loser |
+|---|---|---|
+| `frac_variance` | css (0.685 / 0.248) | **maxmin last** (0.640 / 0.216) |
+| `tiered_axis_count` | **maxmin first** (7.25 / 19.0) | random last (3.97 / 12.6) |
+
+*(values: containment / Jaccard)*
+
+**Why:** MaxMin maximizes pairwise correlation-distance between selected
+references — by construction every picked reference is far from every already-
+chosen one. This makes each reference individually informative (high
+tiered_axis_count) but wastes picks on the *periphery* of the variance
+distribution rather than its *core* (low frac_variance). CSS and greedy_var do
+the opposite: they greedily grab the highest-variance directions, which may
+cluster if the dataset has a dominant axis.
+
+This disagreement is **robust**: it holds on both matrices and at all k values
+tested. It is the central empirical question for the Tier-2 benchmark to resolve.
+If real MAG yield tracks frac_variance, css/greedy_var will win. If it tracks
+tiered_axis_count, maxmin will win despite its low frac_variance.
+
+### 11.3 Rule differences are small at k≥5 on containment
+
+On the containment matrix at k=10, all six non-random rules span only 0.048
+absolute in frac_variance (0.637–0.685). The practical consequence: if reads are
+available to build the containment matrix, the *choice of rule matters less*.
+The bigger lever is the feature space itself, not the algorithm.
+
+### 11.4 CSS is confirmed competitive with greedy_var
+
+At k=10: css frac_variance 0.685 (containment) / 0.248 (Jaccard) vs greedy_var
+0.682 / 0.246. The gap is within noise for most datasets. CSS has the theoretical
+edge (it directly optimizes frac_variance via pivoted-QR) and is the cleaner
+algorithm; treat it as the reference upper bound among cheap rules.
+
+### 11.5 k saturation not yet characterized
+
+At k=10 with containment, frac_variance (0.685) is still clearly rising. The
+elbow has not been reached for this 63-sample dataset. Run with k ∈
+{3,5,8,10,15,20} to locate the saturation point; this also sets a principled
+upper bound for the Tier-2 extended run.
 
 ---
 
@@ -310,15 +377,24 @@ the per-sample features — arbitrate.** Divergence is where the science is.
 
 ## 10. Open questions (carried forward)
 
-1. **Which Tier-1 proxy predicts Tier-2 MAG yield?** (§6.3, §8) — the central bet.
-   **MAG yield metric:** the benchmark now records both `weighted_mags` (2×n_high +
-   1×n_medium, a binary tier scheme) and `sum_qs` (Σ max(0, completeness − 5×contamination),
-   the continuous Quality Score from dRep / Olm et al. 2017 ISME J). `sum_qs` is more
-   defensible — it captures variation within tiers and penalises contamination
-   proportionately. **If `sum_qs` proves a better predictor of the Tier-1 proxy ranking
-   or a better discriminator between rules, retire `weighted_mags` from the primary
-   analysis.** The 5× contamination penalty is the field standard; revisit only if
-   CheckM2 contamination estimates prove systematically noisy on this dataset.
+1. **Which Tier-1 proxy predicts Tier-2 MAG yield?** (§6.3, §8, §11.2) — the
+   central bet, now sharpened. The Tier-1 run revealed a clean disagreement between
+   `frac_variance` (css/greedy_var best) and `tiered_axis_count` (maxmin best).
+   The Tier-2 benchmark directly tests which is the better predictor. Hypotheses:
+   - *H_frac:* frac_variance predicts MAG yield because differential coverage
+     binning benefits from capturing as much cross-sample variation as possible.
+   - *H_tier:* tiered_axis_count predicts MAG yield because individually
+     informative references (each adding a clean, distinct signal) matter more
+     than aggregate variance captured.
+   If H_frac, css/greedy_var will rank first in Tier-2 despite maxmin's
+   tiered_axis_count advantage. If H_tier, maxmin will outperform on real MAG
+   yield despite its low frac_variance. A mixed result (different winner per k or
+   per focal assembly) points toward the per-sample adaptive meta-selector (§7).
+   **MAG yield metric:** both `weighted_mags` (2×n_high + 1×n_medium) and `sum_qs`
+   (Σ max(0, completeness − 5×contamination), Olm et al. 2017 ISME J) are
+   recorded. `sum_qs` is preferred — continuous, captures within-tier variation,
+   5× contamination penalty is the field standard. Retire `weighted_mags` from
+   primary analysis if `sum_qs` proves equally or more discriminating.
 2. **Adaptive k.** Once the per-sample feature model exists, does the same feature
    set predict the *elbow* of the saturation curve?
 3. **Candidate threshold per feature space.** What min-similarity / min-containment
