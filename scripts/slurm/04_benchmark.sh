@@ -16,6 +16,8 @@
 #   MANIFEST        path to samples.tsv
 #   ASM_DIR         directory of per-sample assembly FASTAs (stem = sample_id)
 #   MATRIX_DIR      directory containing jaccard_matrix.tsv, containment_matrix.tsv
+#   GTDB_DIR        directory containing gtdb_matrix.tsv (from 03c_gtdb_matrix.sh);
+#                   optional — enables taxonomy_stratified when present
 #   BENCHMARK_DIR   output directory for benchmark cells
 #   CHECKM2_DB      path to CheckM2 DIAMOND database
 #   RULES           comma-separated rule names (default: random,maxmin,css)
@@ -35,6 +37,7 @@ mkdir -p logs
 MANIFEST="${MANIFEST:-samples.tsv}"
 ASM_DIR="${ASM_DIR:-assemblies}"
 MATRIX_DIR="${MATRIX_DIR:-matrices}"
+GTDB_DIR="${GTDB_DIR:-}"
 BENCHMARK_DIR="${BENCHMARK_DIR:-benchmark}"
 CHECKM2_DB="${CHECKM2_DB:-}"
 RULES="${RULES:-random,maxmin,css}"
@@ -59,10 +62,15 @@ if [[ -n "$CHECKM2_DB" ]]; then
     DB_FLAG="--checkm2-db $CHECKM2_DB"
 fi
 
-# Build containment-matrix flag only if the file exists.
+# Build optional flags.
 CONT_FLAG=""
 if [[ -f "$MATRIX_DIR/containment_matrix.tsv" ]]; then
     CONT_FLAG="--containment-matrix $MATRIX_DIR/containment_matrix.tsv"
+fi
+
+GTDB_FLAG=""
+if [[ -n "$GTDB_DIR" && -f "$GTDB_DIR/gtdb_matrix.tsv" ]]; then
+    GTDB_FLAG="--gtdb-matrix $GTDB_DIR/gtdb_matrix.tsv"
 fi
 
 conda run -n refrover-benchmark \
@@ -77,6 +85,7 @@ conda run -n refrover-benchmark \
         --outdir            "$BENCHMARK_DIR" \
         --checkm2-path      "$CHECKM2_BIN" \
         $CONT_FLAG \
+        $GTDB_FLAG \
         $DB_FLAG
 
 echo "Shard ${I}/${N} complete."

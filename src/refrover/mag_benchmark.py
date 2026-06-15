@@ -36,7 +36,7 @@ from refrover.binning import list_bins, run_metabat2
 from refrover.checkm2 import run_checkm2
 from refrover.coverage import load_coverage, run_coverm
 from refrover.formatters.metabat2 import write_metabat2
-from refrover.grid import FeatureSpaceSpec  # re-exported for CLI convenience
+from refrover.grid import FeatureSpaceSpec, _instantiate, _rule_valid_for  # re-exported for CLI convenience
 from refrover.mag_quality import count_mags
 from refrover.rules import RULE_REGISTRY
 from refrover.scores import score_selection
@@ -104,6 +104,7 @@ def run_cell(
     assemblies: dict[str, Path | str],
     outdir: Path | str,
     threshold: float = 0.0,
+    clades: pd.Series | None = None,
     checkm2_db: Path | str | None = None,
     threads: int = 8,
     min_contig: int = 1500,
@@ -129,7 +130,10 @@ def run_cell(
         return json.loads(result_json.read_text())
     cell_dir.mkdir(parents=True, exist_ok=True)
 
-    co_map = RULE_REGISTRY[rule_name](k=k, threshold=threshold).select(matrix_T, focal)
+    # Build the rule via _instantiate so taxonomy_stratified receives clades.
+    _spec = FeatureSpaceSpec(name=matrix_name, matrix=matrix_T.T,
+                             threshold=threshold, clades=clades)
+    co_map = _instantiate(rule_name, k, _spec).select(matrix_T, focal)
     proxy_scores = score_selection(matrix_T, co_map)
 
     t0 = time.perf_counter()
@@ -238,6 +242,14 @@ def run_pilot(
     for spec in feature_spaces:
         matrix_T = spec.matrix.T
         for rule_name in rules:
+            if not _rule_valid_for(rule_name, spec):
+                warnings.warn(
+                    f"Rule '{rule_name}' skipped for feature space '{spec.name}' "
+                    "(taxonomy_stratified requires clades — build with "
+                    "'refrover gtdb-gather' + 'refrover gtdb-matrix' first)",
+                    stacklevel=2,
+                )
+                continue
             for k in k_values:
                 for focal in my_focals:
                     if focal not in matrix_T.columns:
@@ -247,8 +259,8 @@ def run_pilot(
                     rows.append(run_cell(
                         matrix_T, spec.name, rule_name, k, focal,
                         manifest=manifest, assemblies=assemblies, outdir=outdir,
-                        threshold=spec.threshold, checkm2_db=checkm2_db,
-                        threads=threads, **cell_kw,
+                        threshold=spec.threshold, clades=spec.clades,
+                        checkm2_db=checkm2_db, threads=threads, **cell_kw,
                     ))
 
     df = pd.DataFrame(rows)

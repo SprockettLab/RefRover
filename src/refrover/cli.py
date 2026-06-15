@@ -352,9 +352,20 @@ def format(coverage_dir, binners, outdir, force):
 @click.option("--containment-matrix", type=click.Path(exists=True),
               help="Precomputed containment matrix TSV "
                    "(from refrover containment)")
-@click.option("--gtdb-matrix", type=click.Path(exists=True),
+@click.option("--gtdb-matrix", type=click.Path(),
               help="Precomputed GTDB abundance matrix TSV "
-                   "(from feature_spaces.gtdb_abundance_matrix)")
+                   "(from refrover gtdb-matrix; derived clade labels are attached "
+                   "to all feature spaces to enable taxonomy_stratified)")
+@click.option("--gtdb-db", default=None, type=click.Path(exists=True),
+              help="GTDB sourmash database (.zip) for auto-building the matrix "
+                   "when --gtdb-matrix is absent and taxonomy_stratified is requested. "
+                   "Requires --read-sketches. Not available with --shard.")
+@click.option("--read-sketches", default=None, type=click.Path(exists=True),
+              help="Directory of per-sample read .sig files; used with --gtdb-db "
+                   "for auto-building the GTDB matrix.")
+@click.option("--gtdb-clade-level", default="genus", show_default=True,
+              help="Taxonomic level for clade labels derived from the GTDB matrix "
+                   "(domain, phylum, class, order, family, genus, species)")
 @click.option("--rules", default="random,maxmin,css", show_default=True,
               help="Comma-separated selection rules to benchmark")
 @click.option("--k-range", default="3,5,8,10", show_default=True,
@@ -385,7 +396,8 @@ def format(coverage_dir, binners, outdir, force):
 @click.option("--force", is_flag=True,
               help="Re-run cells that already have a result.json")
 def benchmark(manifest, assemblies_dir, jaccard_matrix, containment_matrix,
-              gtdb_matrix, rules, k_range, focals, shard, checkm2_db, checkm2_path,
+              gtdb_matrix, gtdb_db, read_sketches, gtdb_clade_level,
+              rules, k_range, focals, shard, checkm2_db, checkm2_path,
               min_similarity, min_contig, threads, aligner, outdir, force):
     """Benchmark selection methods by running the full pipeline and measuring MAG quality.
 
@@ -403,29 +415,85 @@ def benchmark(manifest, assemblies_dir, jaccard_matrix, containment_matrix,
     from refrover.mag_benchmark import run_pilot, FeatureSpaceSpec
 
     df = read_manifest(manifest)
+    rule_list = [r.strip() for r in rules.split(",")]
+
+    # ── resolve GTDB matrix when taxonomy_stratified is requested ─────────────
+    # The GTDB matrix is NOT a separate feature space for Tier-2 selection
+    # (taxa are not sample-dimension vectors). Instead, it is used to derive
+    # per-assembly clade labels which are attached to all feature spaces.
+    gtdb_mat_path = gtdb_matrix
+    if "taxonomy_stratified" in rule_list and not gtdb_mat_path:
+        # 1. Check conventional cache location: {outdir}/../gtdb/gtdb_matrix.tsv
+        cached = Path(outdir).parent / "gtdb" / "gtdb_matrix.tsv"
+        if cached.exists():
+            gtdb_mat_path = str(cached)
+            click.echo(f"Using cached GTDB matrix: {cached}")
+        elif gtdb_db and read_sketches:
+            if shard:
+                raise click.ClickException(
+                    "Auto-building the GTDB matrix is not available in --shard mode.\n"
+                    "Run 'refrover gtdb-gather --shard i/N' then 'refrover gtdb-matrix' "
+                    "first, and pass the result with --gtdb-matrix."
+                )
+            click.echo(
+                "taxonomy_stratified requested but --gtdb-matrix not provided.\n"
+                f"Auto-building from {read_sketches} × {gtdb_db} …\n"
+                "(this may take several minutes for large datasets)"
+            )
+            from refrover.gtdb import (
+                run_gather_sample, aggregate_gather, write_gtdb_matrix,
+            )
+            gather_dir = Path(outdir).parent / "gtdb" / "gather"
+            gather_dir.mkdir(parents=True, exist_ok=True)
+            sig_dir = Path(read_sketches)
+            for sid in df["sample_id"]:
+                sig = sig_dir / f"{sid}.sig"
+                if not sig.exists():
+                    click.echo(f"  WARNING: read sig missing for {sid}, skipped", err=True)
+                    continue
+                run_gather_sample(sid, sig, gtdb_db, gather_dir, force=force)
+            gtdb_matrix_df = aggregate_gather(gather_dir, df["sample_id"].tolist())
+            gtdb_mat_path = str(cached)
+            write_gtdb_matrix(gtdb_matrix_df, gtdb_mat_path)
+            click.echo(f"GTDB matrix ({gtdb_matrix_df.shape[0]}×{gtdb_matrix_df.shape[1]}) "
+                       f"→ {gtdb_mat_path}")
+        else:
+            click.echo(
+                "WARNING: taxonomy_stratified requested but no GTDB matrix available.\n"
+                "  Options:\n"
+                "    --gtdb-matrix <path>        prebuilt matrix\n"
+                "    --gtdb-db <db> --read-sketches <dir>  auto-build (non-sharded only)\n"
+                "taxonomy_stratified will be skipped for all feature spaces.",
+                err=True,
+            )
+
+    # Derive clade labels from the GTDB matrix (if available).
+    clades = None
+    if gtdb_mat_path and Path(gtdb_mat_path).exists():
+        from refrover.gtdb import infer_clades, load_gtdb_matrix
+        _gtdb_df = load_gtdb_matrix(gtdb_mat_path)
+        clades = infer_clades(_gtdb_df, level=gtdb_clade_level)
+        click.echo(
+            f"Loaded GTDB clades ({clades.nunique()} unique {gtdb_clade_level}s) "
+            f"from {gtdb_mat_path}"
+        )
 
     # Build the list of input matrices to sweep.
     matrix_specs = []
     if jaccard_matrix:
         mat = pd.read_csv(jaccard_matrix, sep="\t", index_col=0)
         matrix_specs.append(FeatureSpaceSpec(name="jaccard", matrix=mat,
-                                             threshold=min_similarity))
+                                             threshold=min_similarity, clades=clades))
     if containment_matrix:
         mat = pd.read_csv(containment_matrix, sep="\t", index_col=0)
         matrix_specs.append(FeatureSpaceSpec(name="containment", matrix=mat,
-                                             threshold=min_similarity))
-    if gtdb_matrix:
-        mat = pd.read_csv(gtdb_matrix, sep="\t", index_col=0)
-        matrix_specs.append(FeatureSpaceSpec(name="gtdb", matrix=mat,
-                                             threshold=min_similarity))
+                                             threshold=min_similarity, clades=clades))
 
     if not matrix_specs:
         raise click.ClickException(
-            "Provide at least one of: --jaccard-matrix, --containment-matrix, "
-            "--gtdb-matrix"
+            "Provide at least one of: --jaccard-matrix, --containment-matrix"
         )
 
-    rule_list = [r.strip() for r in rules.split(",")]
     k_list = [int(k.strip()) for k in k_range.split(",")]
 
     # Focal assemblies to evaluate.
@@ -587,6 +655,121 @@ def run(manifest, selector, k, min_jaccard, containment_matrix, aligner, binners
     )
     results = pipeline.run()
     click.echo(f"Done. Coverage tables: {list(results.coverage_tables.keys())}")
+
+
+# ── rank-selectors ────────────────────────────────────────────────────────────
+
+# ── gtdb-gather ───────────────────────────────────────────────────────────────
+
+@main.command(name="gtdb-gather")
+@click.option("--manifest", required=True, type=click.Path(exists=True),
+              help="Sample manifest TSV (sample_id, read-sketch column needed — "
+                   "see --read-sketches-col)")
+@click.option("--read-sketches", required=True, type=click.Path(exists=True),
+              help="Directory of per-sample read .sig files (stem = sample_id); "
+                   "built by 'refrover sketch-reads'")
+@click.option("--gtdb-db", required=True, type=click.Path(exists=True),
+              help="GTDB sourmash signature database (.zip). "
+                   "Download: https://sourmash.readthedocs.io/en/latest/databases.html")
+@click.option("--outdir", required=True, type=click.Path(),
+              help="Directory to write per-sample {sample_id}_gather.csv files")
+@click.option("--ksize", default=31, show_default=True,
+              help="k-mer size; must match the read sketches and GTDB database")
+@click.option("--threshold-bp", default=50_000, show_default=True,
+              help="Minimum k-mer overlap (bp) to report a GTDB genome match")
+@click.option("--shard", default=None,
+              help="i/N — process only 1-based shard i of N samples (for SLURM arrays). "
+                   "Run 'refrover gtdb-matrix' when all shards finish.")
+@click.option("--force", is_flag=True, help="Re-run even if output CSV already exists")
+def gtdb_gather_cmd(manifest, read_sketches, gtdb_db, outdir, ksize, threshold_bp,
+                    shard, force):
+    """Run sourmash gather per sample to identify GTDB taxonomic composition.
+
+    Produces one {sample_id}_gather.csv per sample. Run 'refrover gtdb-matrix'
+    once all samples are done to aggregate into the matrix used by
+    'refrover benchmark --gtdb-matrix'.
+
+    Use --shard i/N to split across SLURM array tasks.
+    """
+    from refrover.gtdb import run_gather_sample
+    from refrover.io import read_manifest
+
+    df = read_manifest(manifest)
+    sample_ids = _shard(df["sample_id"].tolist(), shard)
+    sig_dir = Path(read_sketches)
+    outdir = Path(outdir)
+
+    n_done = n_skip = n_fail = 0
+    for sid in sample_ids:
+        sig = sig_dir / f"{sid}.sig"
+        if not sig.exists():
+            click.echo(f"  WARNING: read sig not found for {sid}: {sig}", err=True)
+            n_fail += 1
+            continue
+        result = run_gather_sample(
+            sid, sig, gtdb_db, outdir,
+            ksize=ksize, threshold_bp=threshold_bp, force=force,
+        )
+        if result is None:
+            click.echo(f"  {sid}: no GTDB matches")
+            n_skip += 1
+        else:
+            n_done += 1
+
+    click.echo(
+        f"gtdb-gather: {n_done} gathered, {n_skip} no-match, {n_fail} missing-sig "
+        f"→ {outdir}"
+    )
+
+
+# ── gtdb-matrix ───────────────────────────────────────────────────────────────
+
+@main.command(name="gtdb-matrix")
+@click.option("--gather-dir", required=True, type=click.Path(exists=True),
+              help="Directory of {sample_id}_gather.csv files (from refrover gtdb-gather)")
+@click.option("--manifest", required=True, type=click.Path(exists=True),
+              help="Sample manifest TSV (provides the expected sample_id list)")
+@click.option("--outdir", required=True, type=click.Path(),
+              help="Directory to write gtdb_matrix.tsv")
+@click.option("--clade-level", default="genus", show_default=True,
+              help="Taxonomic rank for clade labels: domain, phylum, class, order, "
+                   "family, genus, species (or a raw GTDB prefix like 'g__')")
+@click.option("--force", is_flag=True)
+def gtdb_matrix_cmd(gather_dir, manifest, outdir, clade_level, force):
+    """Aggregate per-sample gather CSVs into the GTDB abundance matrix.
+
+    Reads every {sample_id}_gather.csv written by 'refrover gtdb-gather' and
+    combines them into a samples × taxa TSV. Also writes clades.tsv (one column:
+    the dominant genus per sample) for inspection.
+
+    Pass the resulting gtdb_matrix.tsv to 'refrover benchmark --gtdb-matrix'.
+    """
+    from refrover.gtdb import aggregate_gather, infer_clades, write_gtdb_matrix
+    from refrover.io import read_manifest
+
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    matrix_out = outdir / "gtdb_matrix.tsv"
+    clades_out = outdir / "clades.tsv"
+
+    if matrix_out.exists() and not force:
+        click.echo(f"GTDB matrix already exists at {matrix_out} (use --force to redo)")
+        return
+
+    df = read_manifest(manifest)
+    sample_ids = df["sample_id"].tolist()
+
+    click.echo(f"Aggregating gather CSVs from {gather_dir} …")
+    matrix = aggregate_gather(gather_dir, sample_ids=sample_ids)
+    write_gtdb_matrix(matrix, matrix_out)
+    click.echo(f"GTDB matrix ({matrix.shape[0]}×{matrix.shape[1]}) → {matrix_out}")
+
+    clades = infer_clades(matrix, level=clade_level)
+    clades.to_csv(clades_out, sep="\t", header=True)
+    click.echo(
+        f"Clade labels ({clade_level}) → {clades_out}  "
+        f"({clades.nunique()} unique clades)"
+    )
 
 
 # ── rank-selectors ────────────────────────────────────────────────────────────
