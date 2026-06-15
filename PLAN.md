@@ -311,6 +311,14 @@ the per-sample features — arbitrate.** Divergence is where the science is.
 ## 10. Open questions (carried forward)
 
 1. **Which Tier-1 proxy predicts Tier-2 MAG yield?** (§6.3, §8) — the central bet.
+   **MAG yield metric:** the benchmark now records both `weighted_mags` (2×n_high +
+   1×n_medium, a binary tier scheme) and `sum_qs` (Σ max(0, completeness − 5×contamination),
+   the continuous Quality Score from dRep / Olm et al. 2017 ISME J). `sum_qs` is more
+   defensible — it captures variation within tiers and penalises contamination
+   proportionately. **If `sum_qs` proves a better predictor of the Tier-1 proxy ranking
+   or a better discriminator between rules, retire `weighted_mags` from the primary
+   analysis.** The 5× contamination penalty is the field standard; revisit only if
+   CheckM2 contamination estimates prove systematically noisy on this dataset.
 2. **Adaptive k.** Once the per-sample feature model exists, does the same feature
    set predict the *elbow* of the saturation curve?
 3. **Candidate threshold per feature space.** What min-similarity / min-containment

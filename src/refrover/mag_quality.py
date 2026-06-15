@@ -43,7 +43,10 @@ def count_mags(
     """
     n_bins = int(len(quality))
     if n_bins == 0:
-        return {"n_bins": 0, "n_high": 0, "n_medium": 0, "n_low": 0, "weighted_mags": 0.0}
+        return {
+            "n_bins": 0, "n_high": 0, "n_medium": 0, "n_low": 0,
+            "weighted_mags": 0.0, "sum_qs": 0.0,
+        }
 
     comp = quality[completeness_col].to_numpy(dtype=float)
     cont = quality[contamination_col].to_numpy(dtype=float)
@@ -54,12 +57,20 @@ def count_mags(
     n_medium = int(is_medium.sum())
     n_low = n_bins - n_high - n_medium
 
+    # Quality Score: completeness − 5 × contamination (dRep / Olm et al. 2017).
+    # Penalises contamination 5× more than incompleteness; captures continuous
+    # variation within and between MIMAG tiers. Only bins above the medium floor
+    # (QS > 0) contribute — a negative QS bin adds nothing useful downstream.
+    qs = comp - 5.0 * cont
+    sum_qs = float(qs[qs > 0].sum())
+
     return {
         "n_bins": n_bins,
         "n_high": n_high,
         "n_medium": n_medium,
         "n_low": n_low,
         "weighted_mags": high_weight * n_high + medium_weight * n_medium,
+        "sum_qs": sum_qs,
     }
 
 

@@ -258,11 +258,29 @@ def run_pilot(
 
 
 def aggregate_results(outdir: Path | str) -> pd.DataFrame:
-    """Collect every cell's ``result.json`` (and ``error.json``) under ``outdir``."""
+    """Collect every cell's ``result.json`` (and ``error.json``) under ``outdir``.
+
+    Backfills ``sum_qs`` for cells whose ``result.json`` predates that field by
+    reading the sibling ``checkm2/quality_report.tsv`` when present.
+    """
+    from refrover.mag_quality import count_mags
+    from refrover.checkm2 import load_quality_report, QUALITY_REPORT
+
     outdir = Path(outdir)
     rows = []
     for p in sorted(outdir.rglob("result.json")):
-        rows.append(json.loads(p.read_text()))
+        row = json.loads(p.read_text())
+        if "sum_qs" not in row:
+            qr = p.parent / "checkm2" / QUALITY_REPORT
+            if qr.exists():
+                try:
+                    quality = load_quality_report(qr)
+                    row["sum_qs"] = count_mags(quality)["sum_qs"]
+                except Exception:
+                    row["sum_qs"] = None
+            else:
+                row["sum_qs"] = None
+        rows.append(row)
     for p in sorted(outdir.rglob("error.json")):
         rows.append(json.loads(p.read_text()))
     return pd.DataFrame(rows)
