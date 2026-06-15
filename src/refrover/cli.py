@@ -789,33 +789,40 @@ def rank_selectors_cmd(jaccard_matrix, containment_matrix, rules, k_range,
                        min_similarity, outdir):
     """Fast alignment-free proxy scoring across selection rules.
 
-    Ranks selection rules in seconds (no alignment) using variance-explained
-    proxy scores. Use this for a cheap screen before running 'refrover benchmark'.
-    Provide either --jaccard-matrix or --containment-matrix.
+    Ranks selection rules in seconds (no alignment) using all three proxy scores:
+    frac_variance (fraction of cross-sample variance explained), effective_rank
+    (number of independent axes selected), and tiered_axis_count (high- and
+    medium-quality axes weighted 2:1). Use this for a cheap screen before running
+    'refrover benchmark'. Provide either --jaccard-matrix or --containment-matrix.
+
+    Writes two TSVs: selector_ranking.tsv (mean scores per rule×k) and
+    selector_scores.tsv (full per-sample distribution for deeper analysis).
     """
     import pandas as pd
-    from refrover.benchmark import rank_selectors
+    from refrover.grid import FeatureSpaceSpec, headline, run_grid
 
     if bool(jaccard_matrix) == bool(containment_matrix):
         raise click.ClickException(
             "Provide exactly one of --jaccard-matrix or --containment-matrix."
         )
 
-    matrix = pd.read_csv(
-        jaccard_matrix or containment_matrix, sep="\t", index_col=0
-    )
+    matrix_path = jaccard_matrix or containment_matrix
+    matrix_name = "jaccard" if jaccard_matrix else "containment"
+    matrix = pd.read_csv(matrix_path, sep="\t", index_col=0)
 
     rule_list = [r.strip() for r in rules.split(",")]
     k_list = [int(k.strip()) for k in k_range.split(",")]
 
-    ranking = rank_selectors(
-        matrix, selectors=rule_list, k_values=k_list, min_similarity=min_similarity,
-    )
+    spec = FeatureSpaceSpec(name=matrix_name, matrix=matrix, threshold=min_similarity)
+    result = run_grid([spec], rule_list, k_list)
 
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
-    out_tsv = outdir / "selector_ranking.tsv"
-    ranking.to_csv(out_tsv, sep="\t", index=False)
+
+    ranking = headline(result.scores)
+    ranking.to_csv(outdir / "selector_ranking.tsv", sep="\t", index=False)
+    result.scores.to_csv(outdir / "selector_scores.tsv", sep="\t", index=False)
 
     click.echo(ranking.to_string(index=False))
-    click.echo(f"\nRanking → {out_tsv}")
+    click.echo(f"\nRanking → {outdir / 'selector_ranking.tsv'}")
+    click.echo(f"Per-sample scores → {outdir / 'selector_scores.tsv'}")
