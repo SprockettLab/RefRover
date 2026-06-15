@@ -68,7 +68,10 @@ def run_checkm2(
     ]
     if db_path is not None:
         cmd += ["--database_path", str(db_path)]
-    if force:
+    # Pass --force to CheckM2 when the output directory exists but the report
+    # is absent — this is a partial/failed prior run that CheckM2 won't
+    # overwrite without explicit permission.
+    if force or (outdir.exists() and not report.exists()):
         cmd.append("--force")
 
     # When checkm2_path is absolute (from a separate conda env), its sibling
