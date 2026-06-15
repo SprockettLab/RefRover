@@ -36,7 +36,16 @@ def test_count_mags_tiers(quality):
 
 def test_count_mags_empty():
     out = count_mags(pd.DataFrame({"Completeness": [], "Contamination": []}))
-    assert out == {"n_bins": 0, "n_high": 0, "n_medium": 0, "n_low": 0, "weighted_mags": 0.0}
+    assert out == {"n_bins": 0, "n_high": 0, "n_medium": 0, "n_low": 0,
+                   "weighted_mags": 0.0, "sum_qs": 0.0}
+
+
+def test_count_mags_sum_qs(quality):
+    out = count_mags(quality)
+    # b1: 95 - 5*2 = 85; b2: 92 - 5*8 = 52; b3: 70 - 5*3 = 55;
+    # b4: 60 - 5*12 = -0 (negative, excluded); b5: 30 - 5*1 = 25
+    expected = 85.0 + 52.0 + 55.0 + 25.0
+    assert out["sum_qs"] == pytest.approx(expected)
 
 
 def test_count_mags_custom_thresholds(quality):
@@ -123,6 +132,22 @@ def test_run_checkm2_raises_when_no_report(tmp_path):
     with patch("subprocess.run", return_value=ok_no_file):
         with pytest.raises(RuntimeError, match="no quality_report"):
             run_checkm2(tmp_path / "bins", tmp_path / "out")
+
+
+def test_run_checkm2_auto_force_on_partial_dir(tmp_path):
+    # Simulate a partial run: outdir exists but quality_report.tsv is missing.
+    out = tmp_path / "checkm2_out"
+    out.mkdir()
+    (out / "diamond.tsv").write_text("partial\n")  # leftover from a crashed run
+
+    def fake_run(cmd, **kw):
+        _write_report(out)
+        return type("R", (), {"returncode": 0, "stderr": ""})()
+
+    with patch("subprocess.run", side_effect=fake_run) as m:
+        run_checkm2(tmp_path / "bins", out)
+    cmd = m.call_args[0][0]
+    assert "--force" in cmd
 
 
 def test_load_quality_report_roundtrip(tmp_path):
