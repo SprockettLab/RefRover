@@ -368,6 +368,10 @@ def format(coverage_dir, binners, outdir, force):
 @click.option("--checkm2-db", default=None, type=click.Path(exists=True),
               help="CheckM2 DIAMOND database path "
                    "(~/checkm2_db/CheckM2_database/uniref100.KO.1.dmnd)")
+@click.option("--checkm2-path", default="checkm2", show_default=True,
+              help="Path to the checkm2 binary; use this when checkm2 lives in "
+                   "a separate conda env, e.g. "
+                   "$(conda run -n checkm2 which checkm2)")
 @click.option("--min-similarity", default=0.0, show_default=True,
               help="Minimum similarity/containment floor for co-map candidates")
 @click.option("--min-contig", default=1500, show_default=True,
@@ -381,7 +385,7 @@ def format(coverage_dir, binners, outdir, force):
 @click.option("--force", is_flag=True,
               help="Re-run cells that already have a result.json")
 def benchmark(manifest, assemblies_dir, jaccard_matrix, containment_matrix,
-              gtdb_matrix, rules, k_range, focals, shard, checkm2_db,
+              gtdb_matrix, rules, k_range, focals, shard, checkm2_db, checkm2_path,
               min_similarity, min_contig, threads, aligner, outdir, force):
     """Benchmark selection methods by running the full pipeline and measuring MAG quality.
 
@@ -470,6 +474,7 @@ def benchmark(manifest, assemblies_dir, jaccard_matrix, containment_matrix,
         assemblies=assemblies,
         outdir=outdir,
         checkm2_db=checkm2_db,
+        checkm2_path=checkm2_path,
         threads=threads,
         shard=shard,
         min_contig=min_contig,

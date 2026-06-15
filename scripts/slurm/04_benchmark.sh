@@ -44,27 +44,39 @@ THREADS="${THREADS:-8}"
 N=${SLURM_ARRAY_TASK_COUNT:-1}
 I=${SLURM_ARRAY_TASK_ID:-1}
 
-# Build the --checkm2-db flag only when a db path is set.
+# Locate the checkm2 binary (lives in its own conda env to avoid dep conflicts).
+CHECKM2_BIN=$(conda run -n checkm2 which checkm2 2>/dev/null || echo "")
+if [[ -z "$CHECKM2_BIN" ]]; then
+    echo "ERROR: checkm2 not found in conda env 'checkm2'. Install it first:" >&2
+    echo "  conda env create -f environment-checkm2.yml" >&2
+    echo "  conda activate checkm2 && checkm2 database --download --path ~/checkm2_db" >&2
+    exit 1
+fi
+
+# Build optional flags.
 DB_FLAG=""
 if [[ -n "$CHECKM2_DB" ]]; then
     DB_FLAG="--checkm2-db $CHECKM2_DB"
 fi
 
-# CheckM2 runs inside its own conda env; pass its binary path so the
-# refrover-benchmark env can invoke it via subprocess.
-CHECKM2_BIN=$(conda run -n checkm2 which checkm2 2>/dev/null || echo "checkm2")
+# Build containment-matrix flag only if the file exists.
+CONT_FLAG=""
+if [[ -f "$MATRIX_DIR/containment_matrix.tsv" ]]; then
+    CONT_FLAG="--containment-matrix $MATRIX_DIR/containment_matrix.tsv"
+fi
 
 conda run -n refrover-benchmark \
     refrover benchmark \
         --manifest          "$MANIFEST" \
         --assemblies-dir    "$ASM_DIR" \
         --jaccard-matrix    "$MATRIX_DIR/jaccard_matrix.tsv" \
-        --containment-matrix "$MATRIX_DIR/containment_matrix.tsv" \
         --rules             "$RULES" \
         --k-range           "$K_RANGE" \
         --threads           "$THREADS" \
         --shard             "${I}/${N}" \
         --outdir            "$BENCHMARK_DIR" \
+        --checkm2-path      "$CHECKM2_BIN" \
+        $CONT_FLAG \
         $DB_FLAG
 
 echo "Shard ${I}/${N} complete."
