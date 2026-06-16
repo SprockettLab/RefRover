@@ -1,6 +1,6 @@
 # PLAN.md — RefRover research roadmap & restart spec
 
-> Status: **Tier-1 complete; Tier-2 actively running (2026-06).** This document
+> Status: **Tier-1 complete; Tier-2 running on 30-focal subset (2026-06).** This document
 > supersedes the ad-hoc selector design described in `CLAUDE.md`. Where the two
 > disagree, PLAN.md is the source of truth for *what we are building next*;
 > CLAUDE.md still describes the pipeline plumbing (sketch → align → coverage →
@@ -280,15 +280,41 @@ the per-sample features — arbitrate.** Divergence is where the science is.
   `(feature × rule × k)` grid, per-sample score family (§6), and overlap are
   implemented and have been run on the AMY1 dataset (63 samples, 2 feature spaces,
   6 rules, k ∈ {3,5,8,10}). See §11 for empirical findings.
-- **Tier 2 — downstream, gold standard (ACTIVELY RUNNING on AMY1).** The full
-  pipeline (align → CoverM → MetaBAT2 → CheckM2) runs via `refrover benchmark`
-  with SLURM sharding (16 parallel shards × 4 threads). Current run: Jaccard
-  feature space, rules = random/maxmin/css, k ∈ {3,5,8,10}, 63 focal assemblies
-  (756 cells total). A second run with all 6 rules across both matrices is
-  planned once the first completes. Primary yield metric: `sum_qs` (Σ max(0,
-  completeness − 5×contamination), Olm et al. 2017 ISME J); `weighted_mags` kept
-  for comparison. The central open question: **does any Tier-1 proxy predict the
-  Tier-2 ranking?**
+- **Tier 2 — downstream, gold standard (RUNNING on AMY1 30-focal subset).**
+  The full pipeline (align → CoverM → MetaBAT2 → CheckM2) runs via
+  `refrover benchmark`. After an initial slow run (SLURM array, sequential
+  alignments, k ∈ {3,5,8,10}) was killed at ~2% completion, the run was
+  restarted with:
+  - **30 focal assemblies** (random subset; see `work/focals_30.txt` on
+    `cbsupoole`)
+  - **k ∈ {5,10,15,20,adaptive}** — k=3 dropped (rules indistinguishable;
+    see §11.6); k=5 kept as baseline; k=15,20 added to locate saturation
+    elbow; `adaptive` calls `containment_saturation` estimator per focal
+  - **Rules: random, maxmin, css** (3 rules × 5 k-values × 2 matrices = 30
+    cells per focal; 900 cells total)
+  - **Execution: GNU parallel -j8 on `cbsupoole`** (64 cores, 256GB RAM,
+    exclusive access), 8 threads per process — no SLURM needed on a single
+    reserved node. Command in `work/parallel_benchmark.log`.
+  - **Adaptive k implementation:** `k="adaptive"` is now a first-class
+    sentinel in `--k-range`; `estimate_k()` (containment_saturation method,
+    k_min=3, k_max=20) is called per focal at cell runtime. `k_actual` column
+    in result.json records what was chosen.
+  - **Parallel alignments:** within each cell, k alignment jobs now run
+    concurrently via `ThreadPoolExecutor` (threads // k per job), replacing
+    the previous sequential loop.
+  - Estimated runtime: ~20 hours on the 64-core node.
+  Primary yield metric: `sum_qs` (Σ max(0, completeness − 5×contamination),
+  Olm et al. 2017 ISME J); `weighted_mags` kept for comparison. The central
+  open question: **does any Tier-1 proxy predict the Tier-2 ranking?**
+
+  **When results are ready:** run `refrover aggregate-results --outdir
+  work/benchmark2` to merge all result.json files into a single TSV, then
+  download to local machine for R analysis. Key plots to make:
+  - `sum_qs` vs `frac_variance` per cell (does H_frac hold?)
+  - `sum_qs` vs `tiered_axis_count` per cell (does H_tier hold?)
+  - k-curve per rule (where does MAG yield saturate vs proxy saturation?)
+  - adaptive k distribution: histogram of `k_actual` across 30 focals
+  - MAG yield vs `k_actual` vs fixed k=10/15/20 (is adaptive competitive?)
 
 ---
 
@@ -351,6 +377,33 @@ At k=10 with containment, frac_variance (0.685) is still clearly rising. The
 elbow has not been reached for this 63-sample dataset. Run with k ∈
 {3,5,8,10,15,20} to locate the saturation point; this also sets a principled
 upper bound for the Tier-2 extended run.
+
+### 11.6 Jaccard Tier-1 full results (all 6 rules × k ∈ {3,5,8,10})
+
+Full run on AMY1 (63 samples, `--min-similarity 0.05`):
+
+| rule | k=3 frac_var | k=5 frac_var | k=8 frac_var | k=10 frac_var | k=10 tiered |
+|---|---|---|---|---|---|
+| css | 0.099 | 0.146 | 0.209 | **0.248** | 18.2 |
+| greedy_var | 0.093 | 0.142 | 0.205 | 0.246 | 18.7 |
+| kmedoids | 0.085 | 0.147 | 0.209 | 0.244 | 15.6 |
+| archetype | 0.080 | 0.139 | 0.204 | 0.241 | 15.1 |
+| random | 0.090 | 0.134 | 0.192 | 0.229 | 12.6 |
+| maxmin | 0.079 | 0.121 | 0.180 | 0.216 | **19.0** |
+
+Key observations:
+- **k=3: complete rule indistinguishability.** `tiered_axis_count` = 6.0 for
+  every rule except random (5.9) and archetype (5.98) — at the theoretical max
+  of 2×3. No information about rule quality at this k.
+- **k=5: near-indistinguishability.** `tiered_axis_count` span = 9.67–9.95
+  (3%). frac_variance span = 0.134–0.147 (10% relative). Not enough signal to
+  pick a rule. Decision: **drop k=3 from Tier-2; keep k=5 as minimum baseline.**
+- **k=10: MaxMin paradox confirmed on Jaccard** (matches containment, §11.2):
+  maxmin last on frac_variance (0.216), first on tiered_axis_count (19.0).
+- **Jaccard variance low throughout:** even at k=10, best frac_variance = 0.248
+  (css). Containment reaches 0.685. This 3× gap makes containment the more
+  informative feature space for Tier-2 cells; both are included to test whether
+  that gap translates to real MAG yield.
 
 ---
 
