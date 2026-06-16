@@ -26,6 +26,7 @@ from itertools import combinations
 
 import pandas as pd
 
+from refrover.adaptive_k import AdaptiveMethod, estimate_k
 from refrover.rules import RULE_REGISTRY
 from refrover.scores import score_selection
 
@@ -89,10 +90,13 @@ def _jaccard(a: set, b: set) -> float:
 def run_grid(
     feature_spaces: list[FeatureSpaceSpec],
     rules: list[str],
-    k_values: list[int],
+    k_values: list[int | str],
     *,
     query_ids: list[str] | None = None,
     score_kwargs: dict | None = None,
+    adaptive_k_method: AdaptiveMethod = "containment_saturation",
+    adaptive_k_min: int = 3,
+    adaptive_k_max: int = 20,
 ) -> GridResult:
     """
     Run the full feature × rule × k grid.
@@ -105,19 +109,26 @@ def run_grid(
         Rule ids from ``rules.RULE_REGISTRY``. Combinations invalid for a feature
         space (per §5) are skipped. A rule needing an optional dependency that is
         not installed (e.g. ``archetype``) is skipped grid-wide with a warning.
-    k_values : list[int]
-        Budgets to sweep.
+    k_values : list[int | str]
+        Budgets to sweep. The special sentinel ``"adaptive"`` causes k to be
+        estimated per-sample via :func:`~refrover.adaptive_k.estimate_k`; the
+        result row records ``k="adaptive"`` and ``k_actual=<estimated int>``.
     query_ids : list[str], optional
         Samples to score (default: every row of each feature space's matrix,
         intersected with this list when given).
     score_kwargs : dict, optional
         Forwarded to the score family (e.g. ``high_ratio=`` for tiered_axis_count).
+    adaptive_k_method : str
+        Estimator used when k="adaptive" (default: "containment_saturation").
+    adaptive_k_min, adaptive_k_max : int
+        Bounds on the per-sample adaptive k.
 
     Returns
     -------
     GridResult
-        ``scores`` (tidy per-sample score family), ``overlap`` (pairwise rule
-        agreement per sample/k), and ``selections`` (the raw picks).
+        ``scores`` (tidy per-sample score family, with ``k_actual`` column when
+        adaptive rows are present), ``overlap`` (pairwise rule agreement per
+        sample/k), and ``selections`` (the raw picks).
     """
     score_kwargs = score_kwargs or {}
     score_records: list[dict] = []
@@ -132,12 +143,25 @@ def run_grid(
             if rule_name in skip_rules or not _rule_valid_for(rule_name, spec):
                 continue
             for k in k_values:
-                rule = _instantiate(rule_name, k, spec)
+                is_adaptive = (k == "adaptive")
+                if not is_adaptive:
+                    rule = _instantiate(rule_name, k, spec)
                 for q in ids:
                     try:
                         with warnings.catch_warnings():
                             # "fewer candidates than k" is expected; n_selected records it.
                             warnings.simplefilter("ignore", UserWarning)
+                            if is_adaptive:
+                                k_i = estimate_k(
+                                    M, q,
+                                    min_jaccard=spec.threshold,
+                                    method=adaptive_k_method,
+                                    k_min=adaptive_k_min,
+                                    k_max=adaptive_k_max,
+                                )
+                                rule = _instantiate(rule_name, k_i, spec)
+                            else:
+                                k_i = k
                             selected = rule.select(M, q)
                     except ImportError as exc:
                         warnings.warn(
@@ -153,6 +177,7 @@ def run_grid(
                             "feature_space": spec.name,
                             "rule": rule_name,
                             "k": k,
+                            "k_actual": k_i if is_adaptive else None,
                             "n_selected": len(selected),
                         }
                         score_records.append({**base, **scores})

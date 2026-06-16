@@ -369,7 +369,17 @@ def format(coverage_dir, binners, outdir, force):
 @click.option("--rules", default="random,maxmin,css", show_default=True,
               help="Comma-separated selection rules to benchmark")
 @click.option("--k-range", default="3,5,8,10", show_default=True,
-              help="Comma-separated k values to sweep")
+              help="Comma-separated k values to sweep; include 'adaptive' to let "
+                   "RefRover pick k per focal from the marginal-variance saturation curve "
+                   "(e.g. '3,5,8,10,adaptive')")
+@click.option("--adaptive-k-method",
+              default="containment_saturation", show_default=True,
+              type=click.Choice(["containment_saturation", "scree_elbow",
+                                 "similarity_gap", "saturation_curve"]),
+              help="Estimator used when k='adaptive'. "
+                   "'containment_saturation' (default) is the validated method: greedy "
+                   "residual-variance forward selection, stopping when marginal gain "
+                   "falls below 10%% of the first gain.")
 @click.option("--focals", default=None, type=click.Path(exists=True),
               help="File listing focal sample_ids to benchmark (one per line); "
                    "default is all samples in the manifest")
@@ -397,7 +407,7 @@ def format(coverage_dir, binners, outdir, force):
               help="Re-run cells that already have a result.json")
 def benchmark(manifest, assemblies_dir, jaccard_matrix, containment_matrix,
               gtdb_matrix, gtdb_db, read_sketches, gtdb_clade_level,
-              rules, k_range, focals, shard, checkm2_db, checkm2_path,
+              rules, k_range, adaptive_k_method, focals, shard, checkm2_db, checkm2_path,
               min_similarity, min_contig, threads, aligner, outdir, force):
     """Benchmark selection methods by running the full pipeline and measuring MAG quality.
 
@@ -494,7 +504,10 @@ def benchmark(manifest, assemblies_dir, jaccard_matrix, containment_matrix,
             "Provide at least one of: --jaccard-matrix, --containment-matrix"
         )
 
-    k_list = [int(k.strip()) for k in k_range.split(",")]
+    k_list = [
+        k.strip() if k.strip().lower() == "adaptive" else int(k.strip())
+        for k in k_range.split(",")
+    ]
 
     # Focal assemblies to evaluate.
     if focals:
@@ -547,6 +560,7 @@ def benchmark(manifest, assemblies_dir, jaccard_matrix, containment_matrix,
         shard=shard,
         min_contig=min_contig,
         aligner_bin=aligner,
+        adaptive_k_method=adaptive_k_method,
         force=force,
     )
 
@@ -782,11 +796,16 @@ def gtdb_matrix_cmd(gather_dir, manifest, outdir, clade_level, force):
 @click.option("--rules", default="random,maxmin,kmedoids,greedy_var,css",
               show_default=True, help="Comma-separated rule IDs to score")
 @click.option("--k-range", default="3,5,8,10", show_default=True,
-              help="Comma-separated k values to test")
+              help="Comma-separated k values to test; 'adaptive' also accepted")
+@click.option("--adaptive-k-method",
+              default="containment_saturation", show_default=True,
+              type=click.Choice(["containment_saturation", "scree_elbow",
+                                 "similarity_gap", "saturation_curve"]),
+              help="Estimator used when k='adaptive'")
 @click.option("--min-similarity", default=0.1, show_default=True)
 @click.option("--outdir", required=True, type=click.Path())
 def rank_selectors_cmd(jaccard_matrix, containment_matrix, rules, k_range,
-                       min_similarity, outdir):
+                       adaptive_k_method, min_similarity, outdir):
     """Fast alignment-free proxy scoring across selection rules.
 
     Ranks selection rules in seconds (no alignment) using all three proxy scores:
@@ -811,10 +830,13 @@ def rank_selectors_cmd(jaccard_matrix, containment_matrix, rules, k_range,
     matrix = pd.read_csv(matrix_path, sep="\t", index_col=0)
 
     rule_list = [r.strip() for r in rules.split(",")]
-    k_list = [int(k.strip()) for k in k_range.split(",")]
+    k_list = [
+        k.strip() if k.strip().lower() == "adaptive" else int(k.strip())
+        for k in k_range.split(",")
+    ]
 
     spec = FeatureSpaceSpec(name=matrix_name, matrix=matrix, threshold=min_similarity)
-    result = run_grid([spec], rule_list, k_list)
+    result = run_grid([spec], rule_list, k_list, adaptive_k_method=adaptive_k_method)
 
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)

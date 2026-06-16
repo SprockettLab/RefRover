@@ -59,10 +59,12 @@ def align_samples_to_focal(
     """
     Align each co-map sample's reads onto the focal assembly → one sorted BAM each.
 
-    Indexes ``focal_fasta`` once, then for each sample in ``samples`` aligns its
-    reads (manifest ``r1``/``r2``) to it, writing ``bams_dir/{sample}.sorted.bam``
-    so `coverage.run_coverm` consumes the directory unchanged. Idempotent per BAM.
+    Indexes ``focal_fasta`` once, then aligns all k samples concurrently using
+    ``threads`` total threads divided among them (1 thread/alignment minimum).
+    Each alignment writes ``bams_dir/{sample}.sorted.bam``. Idempotent per BAM.
     """
+    import concurrent.futures
+
     focal_fasta = Path(focal_fasta)
     bams_dir = Path(bams_dir)
     bams_dir.mkdir(parents=True, exist_ok=True)
@@ -73,12 +75,20 @@ def align_samples_to_focal(
         _run([aligner_bin, "index", str(focal_fasta)],
              f"{aligner_bin} index {focal_fasta.name}")
 
-    for sid in samples:
+    to_align = [s for s in samples
+                if force or not (bams_dir / f"{s}.sorted.bam").exists()]
+    if not to_align:
+        return bams_dir
+
+    # Spread the thread budget evenly across concurrent alignments; at least 1
+    # thread per job so BWA-MEM2 doesn't serialize on the GIL.
+    threads_per_job = max(1, threads // len(to_align))
+
+    def _align_one(sid: str) -> None:
         bam = bams_dir / f"{sid}.sorted.bam"
-        if bam.exists() and not force:
-            continue
         row = reads.loc[sid]
-        mem = [aligner_bin, "mem", "-t", str(threads), str(focal_fasta), str(row["r1"])]
+        mem = [aligner_bin, "mem", "-t", str(threads_per_job),
+               str(focal_fasta), str(row["r1"])]
         r2 = row.get("r2")
         if isinstance(r2, str) and r2:
             mem.append(r2)
@@ -87,8 +97,13 @@ def align_samples_to_focal(
             proc = subprocess.run(mem, stdout=fh, stderr=subprocess.PIPE, text=True)
         if proc.returncode != 0:
             raise RuntimeError(f"{aligner_bin} mem failed for {sid}:\n{proc.stderr}")
-        _sort_index(sam, bam, samtools_bin, threads)
+        _sort_index(sam, bam, samtools_bin, threads_per_job)
         sam.unlink(missing_ok=True)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(to_align)) as pool:
+        futures = {pool.submit(_align_one, sid): sid for sid in to_align}
+        for fut in concurrent.futures.as_completed(futures):
+            fut.result()  # re-raise any alignment exception
 
     return bams_dir
 
@@ -97,7 +112,7 @@ def run_cell(
     matrix_T: pd.DataFrame,
     matrix_name: str,
     rule_name: str,
-    k: int,
+    k: int | str,
     focal: str,
     *,
     manifest: pd.DataFrame,
@@ -112,6 +127,9 @@ def run_cell(
     samtools_bin: str = "samtools",
     metabat2_path: str = "metabat2",
     checkm2_path: str = "checkm2",
+    adaptive_k_method: str = "containment_saturation",
+    adaptive_k_min: int = 3,
+    adaptive_k_max: int = 20,
     force: bool = False,
 ) -> dict:
     """
@@ -123,6 +141,10 @@ def run_cell(
     (frac_variance, effective_rank, tiered_axis_count) are computed on the same
     selection for later correlation with real MAG yield. Idempotent: an existing
     ``result.json`` is reused unless ``force``.
+
+    When ``k="adaptive"``, the number of co-map samples is estimated per focal
+    using :func:`~refrover.adaptive_k.estimate_k` (``adaptive_k_method``).
+    The result row records both ``k="adaptive"`` and ``k_actual=<int>``.
     """
     cell_dir = Path(outdir) / matrix_name / f"{rule_name}_k{k}" / focal
     result_json = cell_dir / "result.json"
@@ -130,10 +152,23 @@ def run_cell(
         return json.loads(result_json.read_text())
     cell_dir.mkdir(parents=True, exist_ok=True)
 
+    # Resolve adaptive k: estimate per-focal using the containment saturation curve.
+    if k == "adaptive":
+        from refrover.adaptive_k import estimate_k
+        k_actual = estimate_k(
+            matrix_T, focal,
+            min_jaccard=threshold,
+            method=adaptive_k_method,
+            k_min=adaptive_k_min,
+            k_max=adaptive_k_max,
+        )
+    else:
+        k_actual = int(k)
+
     # Build the rule via _instantiate so taxonomy_stratified receives clades.
     _spec = FeatureSpaceSpec(name=matrix_name, matrix=matrix_T.T,
                              threshold=threshold, clades=clades)
-    co_map = _instantiate(rule_name, k, _spec).select(matrix_T, focal)
+    co_map = _instantiate(rule_name, k_actual, _spec).select(matrix_T, focal)
     proxy_scores = score_selection(matrix_T, co_map)
 
     t0 = time.perf_counter()
@@ -164,6 +199,7 @@ def run_cell(
             "matrix": matrix_name,
             "rule": rule_name,
             "k": k,
+            "k_actual": k_actual if k == "adaptive" else None,
             "focal": focal,
             "n_comap": len(co_map),
             **mags,
@@ -180,6 +216,7 @@ def run_cell(
             "matrix": matrix_name,
             "rule": rule_name,
             "k": k,
+            "k_actual": k_actual if k == "adaptive" else None,
             "focal": focal,
             "n_comap": len(co_map),
             "error": str(exc),
@@ -211,7 +248,7 @@ def _shard(items: list, shard: str | None) -> list:
 def run_pilot(
     feature_spaces: list,
     rules: list[str],
-    k_values: list[int],
+    k_values: list[int | str],
     focals: list[str],
     *,
     manifest: pd.DataFrame,
@@ -220,6 +257,9 @@ def run_pilot(
     checkm2_db: Path | str | None = None,
     threads: int = 8,
     shard: str | None = None,
+    adaptive_k_method: str = "containment_saturation",
+    adaptive_k_min: int = 3,
+    adaptive_k_max: int = 20,
     **cell_kw,
 ) -> pd.DataFrame:
     """
@@ -231,6 +271,9 @@ def run_pilot(
     :func:`run_cell` and is resumable. With ``shard='i/N'`` only that round-robin
     slice of focals runs and the combined TSV is *not* written — call
     :func:`aggregate_results` once all shards finish.
+
+    ``k_values`` may include the string ``"adaptive"`` to trigger per-focal k
+    estimation via :func:`~refrover.adaptive_k.estimate_k`.
 
     Returns a tidy DataFrame of all cells this call ran.
     """
@@ -260,7 +303,11 @@ def run_pilot(
                         matrix_T, spec.name, rule_name, k, focal,
                         manifest=manifest, assemblies=assemblies, outdir=outdir,
                         threshold=spec.threshold, clades=spec.clades,
-                        checkm2_db=checkm2_db, threads=threads, **cell_kw,
+                        checkm2_db=checkm2_db, threads=threads,
+                        adaptive_k_method=adaptive_k_method,
+                        adaptive_k_min=adaptive_k_min,
+                        adaptive_k_max=adaptive_k_max,
+                        **cell_kw,
                     ))
 
     df = pd.DataFrame(rows)

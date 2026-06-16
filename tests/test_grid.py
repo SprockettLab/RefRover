@@ -40,11 +40,25 @@ def test_scores_table_shape_and_columns(specs):
     # 2 feature spaces × 4 rules × 2 k × 4 samples = 64 rows
     assert len(res.scores) == 64
     assert set(res.scores.columns) == {
-        "sample_id", "feature_space", "rule", "k", "n_selected",
+        "sample_id", "feature_space", "rule", "k", "k_actual", "n_selected",
         "frac_variance", "effective_rank", "tiered_axis_count",
     }
     assert set(res.scores["feature_space"]) == {"fsA", "fsB"}
     assert set(res.scores["rule"]) == set(RULES)
+
+
+def test_adaptive_k_sentinel(specs):
+    # k="adaptive" rows get k_actual set (int); fixed-k rows get k_actual=None.
+    res = run_grid(specs[:1], ["css"], k_values=[3, "adaptive"])
+    scores = res.scores
+    fixed = scores[scores["k"] == 3]
+    adaptive = scores[scores["k"] == "adaptive"]
+    assert fixed["k_actual"].isna().all()
+    assert adaptive["k_actual"].notna().all()
+    assert (adaptive["k_actual"].dropna().astype(int) >= 1).all()
+    # headline() must not crash when k is mixed int/str
+    hl = headline(scores)
+    assert set(hl["k"].astype(str)) >= {"3", "adaptive"}
 
 
 def test_all_vs_all_is_the_ceiling(specs):
