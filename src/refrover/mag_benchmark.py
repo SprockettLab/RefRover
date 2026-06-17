@@ -87,18 +87,29 @@ def align_samples_to_focal(
     def _align_one(sid: str) -> None:
         bam = bams_dir / f"{sid}.sorted.bam"
         row = reads.loc[sid]
-        mem = [aligner_bin, "mem", "-t", str(threads_per_job),
-               str(focal_fasta), str(row["r1"])]
+        mem_cmd = [aligner_bin, "mem", "-t", str(threads_per_job),
+                   str(focal_fasta), str(row["r1"])]
         r2 = row.get("r2")
         if isinstance(r2, str) and r2:
-            mem.append(r2)
-        sam = bams_dir / f"{sid}.sam"
-        with open(sam, "w") as fh:
-            proc = subprocess.run(mem, stdout=fh, stderr=subprocess.PIPE, text=True)
-        if proc.returncode != 0:
-            raise RuntimeError(f"{aligner_bin} mem failed for {sid}:\n{proc.stderr}")
-        _sort_index(sam, bam, samtools_bin, threads_per_job)
-        sam.unlink(missing_ok=True)
+            mem_cmd.append(r2)
+        # Pipe directly into samtools sort — no SAM written to disk.
+        sort_cmd = [samtools_bin, "sort", "-@", str(threads_per_job),
+                    "-o", str(bam)]
+        bwa = subprocess.Popen(mem_cmd, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE)
+        srt = subprocess.Popen(sort_cmd, stdin=bwa.stdout,
+                               stderr=subprocess.PIPE)
+        bwa.stdout.close()
+        _, bwa_err = bwa.communicate()
+        _, sort_err = srt.communicate()
+        if bwa.returncode != 0:
+            raise RuntimeError(
+                f"{aligner_bin} mem failed for {sid}:\n{bwa_err.decode()}")
+        if srt.returncode != 0:
+            raise RuntimeError(
+                f"samtools sort failed for {sid}:\n{sort_err.decode()}")
+        subprocess.run([samtools_bin, "index", str(bam)],
+                       check=True, capture_output=True)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(to_align)) as pool:
         futures = {pool.submit(_align_one, sid): sid for sid in to_align}
@@ -171,14 +182,22 @@ def run_cell(
     co_map = _instantiate(rule_name, k_actual, _spec).select(matrix_T, focal)
     proxy_scores = score_selection(matrix_T, co_map)
 
+    import shutil
+
     t0 = time.perf_counter()
     try:
-        bams = align_samples_to_focal(
-            assemblies[focal], co_map, manifest, cell_dir / "bams",
-            threads=threads, aligner_bin=aligner_bin, samtools_bin=samtools_bin, force=force,
-        )
-        run_coverm(bams, cell_dir / "coverage", threads=threads, force=force)
-        cov_df = load_coverage(cell_dir / "coverage" / "coverage.tsv")
+        coverage_dir = cell_dir / "coverage"
+        coverage_tsv = coverage_dir / "coverage.tsv"
+        if not coverage_tsv.exists() or force:
+            bams = align_samples_to_focal(
+                assemblies[focal], co_map, manifest, cell_dir / "bams",
+                threads=threads, aligner_bin=aligner_bin,
+                samtools_bin=samtools_bin, force=force,
+            )
+            run_coverm(bams, coverage_dir, threads=threads, force=force)
+            # Delete BAMs immediately — coverage TSV is all that's needed.
+            shutil.rmtree(bams, ignore_errors=True)
+        cov_df = load_coverage(coverage_tsv)
         depth_txt = write_metabat2(cov_df, cell_dir, force=force)
         bins_dir = run_metabat2(
             assemblies[focal], depth_txt, cell_dir / "bins",
