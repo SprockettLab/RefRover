@@ -280,41 +280,55 @@ the per-sample features — arbitrate.** Divergence is where the science is.
   `(feature × rule × k)` grid, per-sample score family (§6), and overlap are
   implemented and have been run on the AMY1 dataset (63 samples, 2 feature spaces,
   6 rules, k ∈ {3,5,8,10}). See §11 for empirical findings.
-- **Tier 2 — downstream, gold standard (RUNNING on AMY1 30-focal subset).**
-  The full pipeline (align → CoverM → MetaBAT2 → CheckM2) runs via
-  `refrover benchmark`. After an initial slow run (SLURM array, sequential
-  alignments, k ∈ {3,5,8,10}) was killed at ~2% completion, the run was
-  restarted with:
-  - **30 focal assemblies** (random subset; see `work/focals_30.txt` on
-    `cbsupoole`)
-  - **k ∈ {5,10,15,20,adaptive}** — k=3 dropped (rules indistinguishable;
-    see §11.6); k=5 kept as baseline; k=15,20 added to locate saturation
-    elbow; `adaptive` calls `containment_saturation` estimator per focal
-  - **Rules: random, maxmin, css** (3 rules × 5 k-values × 2 matrices = 30
-    cells per focal; 900 cells total)
-  - **Execution: GNU parallel -j8 on `cbsupoole`** (64 cores, 256GB RAM,
-    exclusive access), 8 threads per process — no SLURM needed on a single
-    reserved node. Command in `work/parallel_benchmark.log`.
-  - **Adaptive k implementation:** `k="adaptive"` is now a first-class
-    sentinel in `--k-range`; `estimate_k()` (containment_saturation method,
-    k_min=3, k_max=20) is called per focal at cell runtime. `k_actual` column
-    in result.json records what was chosen.
-  - **Parallel alignments:** within each cell, k alignment jobs now run
-    concurrently via `ThreadPoolExecutor` (threads // k per job), replacing
-    the previous sequential loop.
-  - Estimated runtime: ~20 hours on the 64-core node.
+- **Tier 2 — downstream, gold standard (RUNNING on AMY1 10-focal subset,
+  `work/benchmark3/` on `cbsupoole`, started 2026-06-17).**
+  Two prior runs were killed: the first (SLURM array, sequential alignments)
+  was too slow; the second (GNU parallel -j8, k ∈ {5,10,15,20,adaptive} × 30
+  focals = 900 cells) filled `/local` in 23 hours (SAM intermediates + retained
+  BAMs). Two fixes were applied to `mag_benchmark.py`:
+  1. BWA→samtools pipe (no SAM on disk)
+  2. BAM directory deleted immediately after `run_coverm()` completes
+  Current minimal run config:
+  - **10 focal assemblies** (`head -10 work/focals_30.txt`; see `work/focals_10.txt`)
+  - **k ∈ {10, adaptive}** — fewest cells that still test the MaxMin paradox at
+    a k where rules diverge (see §11.6) and characterize the adaptive estimator
+  - **Rules: random, maxmin, css** × 2 matrices (Jaccard + containment) = 6
+    cells per focal; **60 cells total**
+  - **Execution: GNU parallel -j6** on `cbsupoole`, 10 threads per process
+    (6 × 10 = 60 cores, leaving 4 headroom), joblog in
+    `work/parallel_benchmark3.log`
+  - **Output:** `work/benchmark3/`
+  - **Estimated completion:** ~25 hours (~2.5 hrs/cell ÷ 6 parallel)
+  - **Adaptive k:** `k="adaptive"` sentinel triggers `estimate_k()` per focal
+    (containment_saturation method, k_min=3, k_max=20); `k_actual` recorded in
+    result.json
+
   Primary yield metric: `sum_qs` (Σ max(0, completeness − 5×contamination),
   Olm et al. 2017 ISME J); `weighted_mags` kept for comparison. The central
   open question: **does any Tier-1 proxy predict the Tier-2 ranking?**
 
-  **When results are ready:** run `refrover aggregate-results --outdir
-  work/benchmark2` to merge all result.json files into a single TSV, then
-  download to local machine for R analysis. Key plots to make:
+  **When results are ready:**
+  ```bash
+  # On cbsupoole:
+  conda run -n refrover-benchmark \
+      refrover aggregate-results --outdir work/benchmark3 \
+      > work/benchmark3/all_results.tsv
+
+  # Rsync to local:
+  rsync -avz cbsupoole:/workdir/Sprockett/Projects/CU15_AMY1_Copy_Number/RefRover/work/benchmark3/all_results.tsv \
+      ~/Downloads/benchmark3_results.tsv
+  ```
+  Key plots to make in R:
   - `sum_qs` vs `frac_variance` per cell (does H_frac hold?)
   - `sum_qs` vs `tiered_axis_count` per cell (does H_tier hold?)
   - k-curve per rule (where does MAG yield saturate vs proxy saturation?)
-  - adaptive k distribution: histogram of `k_actual` across 30 focals
-  - MAG yield vs `k_actual` vs fixed k=10/15/20 (is adaptive competitive?)
+  - adaptive k distribution: histogram of `k_actual` across 10 focals
+  - Jaccard vs containment cells: does the 3× variance gap translate to MAGs?
+  - MAG yield vs `k_actual` vs fixed k=10 (is adaptive competitive?)
+
+  **If results look clean, expand to:** all 30 focals × k ∈ {5,10,15,20,adaptive}
+  (the original benchmark3 extended config) to confirm saturation elbow and
+  improve statistical power.
 
 ---
 
