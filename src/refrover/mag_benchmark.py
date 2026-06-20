@@ -45,6 +45,18 @@ from refrover.scores import score_selection
 _BWA_INDEX_SENTINEL = ".bwt.2bit.64"
 
 
+def _bam_complete(bam: Path) -> bool:
+    """True if bam exists AND its samtools index was written (last step of _align_one).
+
+    A BAM file that exists but has no .bai/.csi was written by an interrupted
+    process and is likely truncated. Treat it as incomplete so alignment reruns.
+    """
+    return bam.exists() and (
+        Path(str(bam) + ".bai").exists()
+        or Path(str(bam) + ".csi").exists()
+    )
+
+
 def align_samples_to_focal(
     focal_fasta: Path | str,
     samples: list[str],
@@ -76,7 +88,7 @@ def align_samples_to_focal(
              f"{aligner_bin} index {focal_fasta.name}")
 
     to_align = [s for s in samples
-                if force or not (bams_dir / f"{s}.sorted.bam").exists()]
+                if force or not _bam_complete(bams_dir / f"{s}.sorted.bam")]
     if not to_align:
         return bams_dir
 
