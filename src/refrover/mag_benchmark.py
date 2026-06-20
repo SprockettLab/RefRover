@@ -163,29 +163,31 @@ def run_cell(
         return json.loads(result_json.read_text())
     cell_dir.mkdir(parents=True, exist_ok=True)
 
-    # Resolve adaptive k: estimate per-focal using the containment saturation curve.
-    if k == "adaptive":
-        from refrover.adaptive_k import estimate_k
-        k_actual = estimate_k(
-            matrix_T, focal,
-            min_jaccard=threshold,
-            method=adaptive_k_method,
-            k_min=adaptive_k_min,
-            k_max=adaptive_k_max,
-        )
-    else:
-        k_actual = int(k)
-
-    # Build the rule via _instantiate so taxonomy_stratified receives clades.
-    _spec = FeatureSpaceSpec(name=matrix_name, matrix=matrix_T.T,
-                             threshold=threshold, clades=clades)
-    co_map = _instantiate(rule_name, k_actual, _spec).select(matrix_T, focal)
-    proxy_scores = score_selection(matrix_T, co_map)
-
     import shutil
 
     t0 = time.perf_counter()
+    k_actual: int = k if isinstance(k, int) else 0  # overwritten below
+    co_map: list[str] = []
+    proxy_scores: dict = {}
     try:
+        # Resolve adaptive k: estimate per-focal using the containment saturation curve.
+        if k == "adaptive":
+            from refrover.adaptive_k import estimate_k
+            k_actual = estimate_k(
+                matrix_T, focal,
+                min_jaccard=threshold,
+                method=adaptive_k_method,
+                k_min=adaptive_k_min,
+                k_max=adaptive_k_max,
+            )
+        else:
+            k_actual = int(k)
+
+        # Build the rule via _instantiate so taxonomy_stratified receives clades.
+        _spec = FeatureSpaceSpec(name=matrix_name, matrix=matrix_T.T,
+                                 threshold=threshold, clades=clades)
+        co_map = _instantiate(rule_name, k_actual, _spec).select(matrix_T, focal)
+        proxy_scores = score_selection(matrix_T, co_map)
         coverage_dir = cell_dir / "coverage"
         coverage_tsv = coverage_dir / "coverage.tsv"
         if not coverage_tsv.exists() or force:
@@ -243,6 +245,7 @@ def run_cell(
             "wall_seconds": wall,
         }
         error_json.write_text(json.dumps(row, indent=2))
+        shutil.rmtree(cell_dir / "bams", ignore_errors=True)
         warnings.warn(
             f"Cell ({matrix_name}, {rule_name}, k={k}, focal={focal}) failed: {exc}\n"
             f"Details → {error_json}",
