@@ -587,6 +587,7 @@ def aggregate_results_cmd(outdir, out_tsv):
     Run this once all SLURM shards from 'refrover benchmark --shard i/N' have
     finished. Collects every result.json under --outdir into one tidy TSV.
     """
+    import pandas as pd
     from refrover.mag_benchmark import aggregate_results
 
     out_tsv = Path(out_tsv) if out_tsv else Path(outdir) / "benchmark_results.tsv"
