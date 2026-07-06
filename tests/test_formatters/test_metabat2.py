@@ -51,3 +51,24 @@ def test_metabat2_row_count(coverage_df, tmp_path):
     out = format_for_binner(coverage_df, binner="metabat2", outdir=tmp_path)
     df = pd.read_csv(out, sep="\t")
     assert len(df) == len(coverage_df)
+
+
+def test_metabat2_nan_depth_filled_with_zero(coverage_df, tmp_path):
+    """A NaN depth (no coverage in a co-map sample) must be written as 0.0, not an
+    empty field — an empty field crashes MetaBAT2 with `bad_lexical_cast`."""
+    import numpy as np
+    import pytest
+
+    df_in = coverage_df.copy()
+    df_in.loc[df_in.index[0], "s2_depth"] = np.nan
+    with pytest.warns(UserWarning, match="filled 1 NaN"):
+        out = format_for_binner(df_in, binner="metabat2", outdir=tmp_path)
+
+    # No empty fields anywhere in the written file.
+    text = out.read_text()
+    assert "\t\t" not in text and not any(
+        line.endswith("\t") for line in text.splitlines()
+    )
+    df = pd.read_csv(out, sep="\t")
+    assert df.loc[0, "s2"] == 0.0
+    assert df["s2"].notna().all()
