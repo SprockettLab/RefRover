@@ -110,7 +110,8 @@ def test_run_checkm2_invokes_cli_and_parses(tmp_path):
         _write_report(out)
         return type("R", (), {"returncode": 0, "stderr": ""})()
 
-    with patch("subprocess.run", side_effect=fake_run) as m:
+    with patch("shutil.which", return_value="/usr/bin/checkm2"), \
+         patch("subprocess.run", side_effect=fake_run) as m:
         df = run_checkm2(bins, out, db_path="/db/uniref.dmnd", threads=4)
     cmd = m.call_args[0][0]
     assert cmd[:2] == ["checkm2", "predict"]
@@ -129,7 +130,8 @@ def test_run_checkm2_idempotent(tmp_path):
 
 def test_run_checkm2_raises_when_no_report(tmp_path):
     ok_no_file = type("R", (), {"returncode": 0, "stderr": ""})()
-    with patch("subprocess.run", return_value=ok_no_file):
+    with patch("shutil.which", return_value="/usr/bin/checkm2"), \
+         patch("subprocess.run", return_value=ok_no_file):
         with pytest.raises(RuntimeError, match="no quality_report"):
             run_checkm2(tmp_path / "bins", tmp_path / "out")
 
@@ -144,7 +146,8 @@ def test_run_checkm2_auto_force_on_partial_dir(tmp_path):
         _write_report(out)
         return type("R", (), {"returncode": 0, "stderr": ""})()
 
-    with patch("subprocess.run", side_effect=fake_run) as m:
+    with patch("shutil.which", return_value="/usr/bin/checkm2"), \
+         patch("subprocess.run", side_effect=fake_run) as m:
         run_checkm2(tmp_path / "bins", out)
     cmd = m.call_args[0][0]
     assert "--force" in cmd
@@ -154,3 +157,13 @@ def test_load_quality_report_roundtrip(tmp_path):
     _write_report(tmp_path / "o")
     df = load_quality_report(tmp_path / "o" / "quality_report.tsv")
     assert list(df.columns) == ["Name", "Completeness", "Contamination"]
+
+
+def test_run_checkm2_fails_fast_when_binary_missing(tmp_path):
+    # An unresolvable binary must raise an actionable RuntimeError before any
+    # subprocess call — not a raw FileNotFoundError that silently sinks cells.
+    with patch("shutil.which", return_value=None), \
+         patch("subprocess.run") as m:
+        with pytest.raises(RuntimeError, match="CheckM2 binary not found"):
+            run_checkm2(tmp_path / "bins", tmp_path / "out", checkm2_path="nope")
+    m.assert_not_called()

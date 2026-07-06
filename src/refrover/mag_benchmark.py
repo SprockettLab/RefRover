@@ -45,15 +45,41 @@ from refrover.scores import score_selection
 _BWA_INDEX_SENTINEL = ".bwt.2bit.64"
 
 
-def _bam_complete(bam: Path) -> bool:
-    """True if bam exists AND its samtools index was written (last step of _align_one).
+# The 28-byte BGZF end-of-file marker htslib writes as the final block of a
+# complete BAM. Its absence ("EOF marker is absent") is exactly how a truncated
+# BAM (interrupted alignment, out-of-disk) manifests — and CoverM then dies with
+# BamTruncatedRecord mid-read. Checking for it is cheaper and stricter than
+# trusting a sibling index, which can outlive a truncated re-write.
+_BGZF_EOF = bytes.fromhex(
+    "1f8b08040000000000ff0600424302001b0003000000000000000000"
+)
 
-    A BAM file that exists but has no .bai/.csi was written by an interrupted
-    process and is likely truncated. Treat it as incomplete so alignment reruns.
+
+def _bgzf_eof_ok(bam: Path) -> bool:
+    """True if ``bam`` ends with the BGZF EOF marker (i.e. wasn't truncated)."""
+    try:
+        size = bam.stat().st_size
+        if size < len(_BGZF_EOF):
+            return False
+        with bam.open("rb") as fh:
+            fh.seek(size - len(_BGZF_EOF))
+            return fh.read(len(_BGZF_EOF)) == _BGZF_EOF
+    except OSError:
+        return False
+
+
+def _bam_complete(bam: Path) -> bool:
+    """True if bam exists, is indexed, AND ends with the BGZF EOF marker.
+
+    A BAM with no .bai/.csi was written by an interrupted process; a BAM missing
+    its EOF marker was truncated (e.g. the process was killed or the disk filled
+    mid-write) even if a stale index survives. Either way, treat it as incomplete
+    so alignment reruns rather than feeding CoverM a corrupt file.
     """
-    return bam.exists() and (
-        Path(str(bam) + ".bai").exists()
-        or Path(str(bam) + ".csi").exists()
+    return (
+        bam.exists()
+        and (Path(str(bam) + ".bai").exists() or Path(str(bam) + ".csi").exists())
+        and _bgzf_eof_ok(bam)
     )
 
 
@@ -375,6 +401,12 @@ def aggregate_results(outdir: Path | str) -> pd.DataFrame:
                 row["sum_qs"] = None
         rows.append(row)
     for p in sorted(outdir.rglob("error.json")):
+        # A cell that later succeeded on a --resume retry keeps its stale
+        # error.json (run_cell writes result.json but never removes the old
+        # error). result.json is authoritative — skip the error to avoid
+        # double-counting the cell as both a success and a failure.
+        if (p.parent / "result.json").exists():
+            continue
         rows.append(json.loads(p.read_text()))
     return pd.DataFrame(rows)
 

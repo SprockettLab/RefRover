@@ -13,6 +13,7 @@ conda env) and its DIAMOND database via ``db_path``.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -81,6 +82,18 @@ def run_checkm2(
     checkm2_bin = Path(checkm2_path)
     if checkm2_bin.is_absolute():
         env["PATH"] = str(checkm2_bin.parent) + os.pathsep + env.get("PATH", "")
+
+    # Fail fast with an actionable message if the binary can't be resolved. A raw
+    # FileNotFoundError ("[Errno 2] ... 'checkm2'") is opaque and, under a sharded
+    # `parallel` run where $CHECKM2 didn't propagate into a worker, silently sinks
+    # whole cells. Resolve against the same env PATH the subprocess will use.
+    if shutil.which(checkm2_path, path=env.get("PATH")) is None:
+        raise RuntimeError(
+            f"CheckM2 binary not found: {checkm2_path!r}. Pass --checkm2-path with "
+            f"an absolute path to the binary (e.g. `conda run -n checkm2 which "
+            f"checkm2`), and ensure the variable is exported into every worker if "
+            f"running under GNU parallel."
+        )
 
     result = subprocess.run(cmd, capture_output=True, text=True, env=env)
     if result.returncode != 0:

@@ -67,15 +67,28 @@ MIN_N_FOR_R = 4  # need at least this many points for a meaningful Spearman
 
 # ── load & normalize ──────────────────────────────────────────────────────────
 
+CELL_KEY = ["matrix", "rule", "k", "focal"]
+
+
 def load(path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Split aggregated results into (successful cells, error cells)."""
+    """Split aggregated results into (successful cells, error cells).
+
+    Defensively drops stale error rows: a cell that failed once then succeeded on
+    a --resume retry can appear as both (older aggregate_results globbed error.json
+    independently of result.json). A success for a cell is authoritative — an error
+    row for the same (matrix, rule, k, focal) is discarded so the failure report
+    isn't inflated and the cell isn't double-counted.
+    """
     raw = pd.read_csv(path, sep="\t")
-    if "error" in raw.columns:
-        err = raw[raw["error"].notna()].copy()
-        ok = raw[raw["error"].isna()].copy()
-    else:
-        err = raw.iloc[0:0].copy()
-        ok = raw.copy()
+    if "error" not in raw.columns:
+        return raw.copy(), raw.iloc[0:0].copy()
+
+    ok = raw[raw["error"].isna()].copy()
+    err = raw[raw["error"].notna()].copy()
+    if set(CELL_KEY).issubset(raw.columns) and not err.empty:
+        succeeded = set(map(tuple, ok[CELL_KEY].astype(str).itertuples(index=False)))
+        keep = ~err[CELL_KEY].astype(str).apply(tuple, axis=1).isin(succeeded)
+        err = err[keep].copy()
     return ok, err
 
 
