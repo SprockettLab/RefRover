@@ -1,10 +1,18 @@
 # PLAN.md — RefRover research roadmap & restart spec
 
-> Status: **Tier-1 complete; Tier-2 running on 30-focal subset (2026-06).** This document
-> supersedes the ad-hoc selector design described in `CLAUDE.md`. Where the two
-> disagree, PLAN.md is the source of truth for *what we are building next*;
-> CLAUDE.md still describes the pipeline plumbing (sketch → align → coverage →
-> format) accurately.
+> Status: **Tier-2 benchmark3 COMPLETE (2026-07-06), 119/120 cells — see §12 for
+> the full resume point.** Headline: at k≥10 the selection method barely moves MAG
+> yield, the Tier-1 proxies do *not* predict Tier-2 yield, and containment's 3×
+> `frac_variance` advantage does *not* translate into MAGs. **`taxonomy_stratified`
+> was NOT in this run** (no GTDB matrix was passed). Next experiment: fixed
+> k ∈ {10,14,20} + `all_vs_all` ceiling + `taxonomy_stratified`, on the 183-sample
+> rewilded-mouse cohort, with a margin-sensitive yield metric. **Start at §12.**
+>
+> This document supersedes the ad-hoc selector design described in `CLAUDE.md`.
+> Where the two disagree, PLAN.md is the source of truth for *what we are building
+> next*; CLAUDE.md still describes the pipeline plumbing (sketch → align → coverage
+> → format) accurately but its `selectors/` tables are the pre-restart design —
+> the live model is the feature-space × rule × k grid (§1).
 >
 > The existing per-sample selectors (`src/refrover/selectors/`), the containment
 > matrix (`containment.py`), and the variance-explained proxy
@@ -280,8 +288,9 @@ the per-sample features — arbitrate.** Divergence is where the science is.
   `(feature × rule × k)` grid, per-sample score family (§6), and overlap are
   implemented and have been run on the AMY1 dataset (63 samples, 2 feature spaces,
   6 rules, k ∈ {3,5,8,10}). See §11 for empirical findings.
-- **Tier 2 — downstream, gold standard (RUNNING on AMY1 10-focal subset,
-  `work/benchmark3/` on `cbsupoole`, started 2026-06-17).**
+- **Tier 2 — downstream, gold standard (COMPLETE 2026-07-06, 119/120 cells,
+  `work/benchmark3/` on `cbsupoole`). Results + interpretation in §12 — read that
+  first. The description below is the run's design.**
   Two prior runs were killed: the first (SLURM array, sequential alignments)
   was too slow; the second (GNU parallel -j8, k ∈ {5,10,15,20,adaptive} × 30
   focals = 900 cells) filled `/local` in 23 hours (SAM intermediates + retained
@@ -485,3 +494,137 @@ Key observations:
    concurrent instances would race on the same outputs. Needs a `--shard i/N`
    (or explicit sample-list) option + a Slurm/array-job wrapper before the
    full-DB validation can run on a cluster.
+
+---
+
+## 12. Current status & resume point (2026-07-06)
+
+**Read this section first when returning to the project.** Everything below §11
+predates the Tier-2 benchmark3 results.
+
+### 12.1 benchmark3 (Tier-2) is complete — 119/120 cells
+
+Run as executed on `cbsupoole` (`work/benchmark3/`):
+- 2 feature spaces (jaccard, containment) × 3 rules (**random, maxmin, css**) ×
+  k ∈ {10, adaptive} × 10 focal assemblies = **120 cells**
+- GNU `parallel -j6`, 10 threads/cell; `sum_qs` primary metric
+- One cell failed (jaccard/random/adaptive/336TP1, MetaBAT2 `bad_lexical_cast`
+  from a NaN depth → empty field; root-caused and fixed, see §12.5). It does not
+  affect any conclusion; closing it is optional.
+
+Aggregate + analyze (the analyzer is new — §12.5):
+```bash
+conda run -n refrover-benchmark refrover aggregate-results --outdir work/benchmark3
+python scripts/analyze_benchmark.py \
+    --results work/benchmark3/benchmark_results.tsv \
+    --outdir  work/benchmark3/analysis/
+```
+
+### 12.2 Findings (primary metric `sum_qs`)
+
+1. **Selection method barely moves yield.** All 12 (matrix, rule, k) configs
+   cluster at **2450–2560 `sum_qs`** (~4.5% spread) with per-config std ~800
+   (SEM ~250 over 10 focals) → configs are **statistically indistinguishable**.
+   Focal-assembly identity drives ~30% of the variance; matrix/rule/k ~4%.
+2. **Tier-1 proxies do NOT predict Tier-2 yield.** Within-(matrix, focal)
+   Spearman ≈ 0 for all three: `frac_variance` −0.002, `effective_rank` −0.081,
+   `tiered_axis_count` −0.022. Top-1 hit rate (proxy picks the real yield winner)
+   20–30% for frac_variance vs **~17% chance** (6 configs/focal); the other two
+   at/below chance. **The Tier-1-predicts-Tier-2 bet fails on this dataset.**
+3. **Containment's 3× `frac_variance` advantage does NOT translate to MAGs.**
+   Jaccard-vs-containment yield Spearman **0.96–0.99**; mean-yield gap <1%
+   (random is even slightly *worse* on containment). `frac_variance` is a
+   within-matrix quantity, not comparable across matrices — Tier-2 confirms it.
+4. **random ≈ css ≈ maxmin.** No selector beats random by a meaningful margin at
+   k≥10. The MaxMin paradox (§11.2) is moot at Tier-2: neither proxy's preferred
+   rule is vindicated because nothing separates from random.
+5. **Adaptive-k is broken.** It pinned to **k_max=20 for every focal** while real
+   yield saturated by **k=10** (k=20 ≈ k=10, sometimes worse). The
+   `containment_saturation` elbow overshoots the real yield-saturation point —
+   the Tier-1≠Tier-2 gap one level down. See §12.6.
+
+**Reframe (DS, 2026-07-06):** rules converging on similar picks is **not** a
+failure — it means the problem is robust and the decision space is small. The
+research question was never "which of my rules wins"; it is the deployment
+question in §12.3.
+
+### 12.3 The actual deliverable + the ONE experiment that answers it
+
+Deployment question: **on a 100+-sample cohort, how much MAG quality is gained at
+k=10 vs 14 vs 20, and does principled sample selection beat naive?** Three ratios
+are the entire deliverable:
+- `yield(k=20) / yield(k=10)` — is 10 enough, or is 20 worth the compute?
+- `yield(best rule) / yield(random)` at each k — does *which* samples matter?
+- `yield(k=10) / yield(all_vs_all)` — how much is lost by subsetting at all?
+
+**Next run (single grid):**
+- **containment** feature space + **fixed k ∈ {10, 14, 20}** (drop adaptive) +
+  **`all_vs_all`** as the yield ceiling
+- **rules: random, css, taxonomy_stratified** (naive floor, best geometric, the
+  intuitive taxonomic one)
+- **dataset: the 183-sample rewilded-mouse cohort** — a real 100+-sample set;
+  AMY1's 63 samples cannot answer a 100+-sample question
+- **GTDB:** build clade labels once via `sourmash gather` against the **full GTDB
+  rs214** (k=31, scaled=1000) — a public release, **not** a sub-DB distilled from
+  these samples (avoids the circularity flagged in §10.6 / memory)
+
+### 12.4 Why `taxonomy_stratified` was NOT in benchmark3 (the gap)
+
+It is **fully implemented** — `rules.TaxonomyStratifiedRule` (one high-variance
+representative per GTDB clade, ranked by mean×variance), the whole profiling path
+in `gtdb.py`, and CLI plumbing (`--gtdb-matrix`, `--gtdb-db`,
+`--gtdb-clade-level`, auto-build from read sketches). benchmark3 simply passed
+`--rules random,maxmin,css` and **no `--gtdb-matrix`**, so no clade labels
+existed and the rule was skipped by the validity check (`grid._rule_valid_for`).
+To include it next time:
+```bash
+refrover gtdb-gather --read-sketches read_sigs/ --gtdb-db /path/gtdb-rs214-reps.k31.zip \
+    --outdir work/gtdb/            # shardable: --shard i/N
+refrover gtdb-matrix  --gather-dir work/gtdb/gather --outdir work/gtdb/
+refrover benchmark ... --gtdb-matrix work/gtdb/gtdb_matrix.tsv \
+    --rules random,css,taxonomy_stratified --k-range 10,14,20
+```
+This is a **priority for the next run.**
+
+### 12.5 Code changes this session (branch `restart-feature-rule-grid`, all pushed)
+
+- **Fix** `cli.aggregate_results_cmd`: missing `import pandas` (NameError crashed
+  every `aggregate-results`).
+- **Fix** `mag_benchmark.aggregate_results`: skip a stale `error.json` when a
+  sibling `result.json` exists (cells that failed then succeeded on `--resume`
+  were double-counted as both success and failure).
+- **Fix** `formatters/metabat2.write_metabat2`: coerce NaN depth/variance → 0.0
+  (empty TSV field was the 336TP1 `bad_lexical_cast` MetaBAT2 crash); warns on fill.
+- **Harden** `checkm2.run_checkm2`: fail fast with an actionable message when the
+  binary can't be resolved (a raw `Errno 2` was silently sinking cells under
+  `parallel` when `$CHECKM2` didn't propagate).
+- **Harden** `mag_benchmark._bam_complete`: require the BGZF EOF marker, not just a
+  sibling `.bai` (a truncated BAM with a stale index crashed CoverM with
+  `BamTruncatedRecord`).
+- **New** `scripts/analyze_benchmark.py`: dependency-light (pandas/scipy) analyzer
+  with the *correct* stats — within-(matrix,focal) Spearman decomposition + top-1
+  hit rate (pooled correlation is confounded across matrices/focals). Handles
+  `k="adaptive"` via `k_actual`, which `analyze_benchmark.R` drops to NA.
+- Tests: **239 passing** (added checkm2 fail-fast, BAM EOF/truncation, metabat2
+  NaN-fill).
+
+### 12.6 Known issues / TODO (carried into next session)
+
+1. **`adaptive_k.estimate_k` pins to k_max.** Diagnose: is the `saturation_fraction`
+   (0.1) elbow threshold too strict, or does the residual-variance curve genuinely
+   never flatten below k=20 on this data? Only worth fixing **if** the fixed
+   k-sweep shows per-sample saturation-k actually *varies* — otherwise hard-code a
+   fixed k and retire adaptive-k.
+2. **Adaptive-k's value proposition is unproven.** It's a per-sample proxy stopping
+   rule; benchmark3 showed its stopping point (20) overshot real yield saturation
+   (~10). Validate against the fixed k-sweep before trusting it.
+3. **Margin-sensitive metric needed** (newly-resolved MAGs vs. a self/k=1
+   baseline) in `mag_quality` + the analyzer. benchmark3's `sum_qs` is dominated
+   by the focal's easy MAGs (recovered under any co-map set), which is the main
+   reason everything looked flat. Add before the next run or the k-sweep risks
+   looking flat for the same insensitivity reason.
+4. **CLAUDE.md** still documents the pre-restart `selectors/` design; the live
+   model is the feature-space × rule × k grid (§1). Plumbing sections remain
+   accurate.
+5. One benchmark3 cell (jaccard/random/adaptive/336TP1) unfinished — optional to
+   close (`rm depth.txt` then re-run the single focal); changes nothing.

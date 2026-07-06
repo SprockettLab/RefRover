@@ -1,5 +1,14 @@
 # CLAUDE.md — RefRover
 
+> **⚠️ Status (2026-07-06): the current design lives in `PLAN.md` — start there,
+> and read `PLAN.md §12` for the latest results and next experiment.** The
+> pipeline plumbing below (sketch → align → coverage → format, manifest/output
+> formats, external tools) is accurate. But the **`selectors/` model described
+> here is pre-restart**: the live design is the **feature-space × rule × k grid**
+> (`src/refrover/rules.py`, `grid.py`, `scores.py`, `mag_benchmark.py`), not the
+> `Selector` classes. Where this file and PLAN.md disagree on *selection*, PLAN.md
+> wins. This banner marks that gap rather than rewriting the tables in place.
+
 RefRover is a standalone Python tool and library that computes binner-ready differential coverage tables from metagenomic assemblies and reads. It handles the full pipeline: assembly sketching (sourmash) → prototype/archetype selection → read alignment → per-contig coverage → formatted output for MetaBAT2, SemiBin2, MaxBin2, CONCOCT, or a generic TSV.
 
 The core scientific contribution is the **adaptive prototype selection algorithm**: for each sample, RefRover intelligently selects a subset of assemblies to map against — large enough to capture differential signal, small enough to be computationally tractable, and constrained so reads actually map (minimum Jaccard similarity threshold). Multiple selection strategies are implemented so they can be benchmarked against each other across different dataset types.
